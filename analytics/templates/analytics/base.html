@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>{% block title %}ChaiIntel Dashboard{% endblock %}</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link href="https://cdn.jsdelivr.net/npm/chart.js/dist/Chart.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #2c8a5a;
+            --secondary-color: #f8f9fa;
+            --accent-color: #e9c46a;
+            --dark-color: #343a40;
+            --light-color: #ffffff;
+        }
+        
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+            background-color: #f5f7fa;
+            color: #333;
+            display: flex;
+            min-height: 100vh;
+        }
+        
+        .sidebar {
+            width: 280px;
+            background: var(--light-color);
+            box-shadow: 2px 0 10px rgba(0,0,0,0.05);
+            padding: 20px 0;
+            position: sticky;
+            top: 0;
+            height: 100vh;
+            overflow-y: auto;
+        }
+        
+        .sidebar-header {
+            padding: 0 20px 20px;
+            border-bottom: 1px solid #eee;
+            margin-bottom: 15px;
+        }
+        
+        .sidebar-nav {
+            padding: 0 15px;
+        }
+        
+        .nav-link {
+            color: var(--dark-color);
+            border-radius: 6px;
+            padding: 10px 15px;
+            margin-bottom: 5px;
+            display: flex;
+            align-items: center;
+            transition: all 0.2s;
+        }
+        
+        .nav-link:hover, .nav-link.active {
+            background-color: rgba(44, 138, 90, 0.1);
+            color: var(--primary-color);
+        }
+        
+        .nav-link i {
+            margin-right: 10px;
+            width: 20px;
+            text-align: center;
+        }
+        
+        .main-content {
+            flex: 1;
+            padding: 30px;
+            overflow-y: auto;
+        }
+        
+        .navbar {
+            background: var(--light-color) !important;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
+            margin-bottom: 30px;
+            border-radius: 10px;
+            padding: 15px 25px;
+        }
+        
+        .card {
+            border: none;
+            border-radius: 12px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.05);
+            transition: transform 0.2s;
+            background: var(--light-color);
+            margin-bottom: 25px;
+        }
+        
+        .card:hover {
+            transform: translateY(-2px);
+        }
+        
+        .card-header {
+            background: transparent;
+            border-bottom: 1px solid rgba(0,0,0,0.05);
+            padding: 15px 20px;
+            font-weight: 600;
+            color: var(--primary-color);
+        }
+        
+        .card-body {
+            padding: 20px;
+        }
+        
+        .chart-container {
+            position: relative;
+            height: 350px;
+            width: 100%;
+        }
+        
+        .highlight-card {
+            border-left: 4px solid var(--primary-color);
+        }
+        
+        .table-responsive {
+            border-radius: 10px;
+            overflow: hidden;
+        }
+        
+        table {
+            border-collapse: separate;
+            border-spacing: 0;
+        }
+        
+        th {
+            background-color: var(--primary-color);
+            color: white;
+            font-weight: 500;
+        }
+        
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #666;
+            font-size: 0.9rem;
+        }
+        
+        h1, h2, h3, h4, h5, h6 {
+            color: var(--dark-color);
+            font-weight: 600;
+        }
+        
+        .badge-tea {
+            background-color: var(--primary-color);
+            color: white;
+        }
+        
+        @media (max-width: 992px) {
+            body {
+                flex-direction: column;
+            }
+            
+            .sidebar {
+                width: 100%;
+                height: auto;
+                position: relative;
+            }
+            
+            .main-content {
+                padding: 20px;
+            }
+        }
+    </style>
+    {% block extra_css %}{% endblock %}
+</head>
+<body>
+    <div class="sidebar">
+        <div class="sidebar-header">
+            <h4 class="mb-0">ChaiIntel</h4>
+            <small class="text-muted">Tea Market Analytics</small>
+        </div>
+        <div class="sidebar-nav">
+            <a href="#" class="nav-link active">
+                <i class="fas fa-chart-line"></i>
+                Dashboard
+            </a>
+             <div class="mt-4 px-3">
+                <h6 class="text-uppercase text-muted small fw-bold">Important Links</h6>
+            </div>
+            <a href="https://www.eatta.co.ke/the-mombasa-tea-auction" class="nav-link" target="_blank">
+                <i class="fas fa-gavel"></i>
+                Mombasa Tea Auction
+            </a>
+            <a href="https://atbltd.com/" class="nav-link" target="_blank">
+                <i class="fas fa-leaf"></i>
+                Africa Tea Brokers
+            </a>
+            <a href="https://www.teaboard.or.ke/" class="nav-link" target="_blank">
+                <i class="fas fa-building"></i>
+                Kenya Tea Board
+            </a>
+            <a href="https://www.fao.org/markets-and-trade/commodities/tea/en/" class="nav-link" target="_blank">
+                <i class="fas fa-globe"></i>
+                FAO Tea Market
+            </a>
+            <a href="https://www.comesa.int/tea/" class="nav-link" target="_blank">
+                <i class="fas fa-chart-pie"></i>
+                COMESA Tea Reports
+            </a>
+            <div class="mt-4 px-3">
+                <h6 class="text-uppercase text-muted small fw-bold">Quick Links</h6>
+            </div>
+            <a href="#" class="nav-link">
+                <i class="fas fa-file-export"></i>
+                Export Reports
+            </a>
+            <a href="#" class="nav-link">
+                <i class="fas fa-bell"></i>
+                Price Alerts
+            </a>
+            <a href="#" class="nav-link">
+                <i class="fas fa-cog"></i>
+                Settings
+            </a>
+        </div>
+    </div>
+
+    <div class="main-content">
+        <nav class="navbar navbar-expand-lg navbar-light">
+            <div class="container-fluid">
+                <h5 class="mb-0">Kenya Tea Export Intelligence</h5>
+                <div>
+                    <span class="badge bg-light text-dark me-2">
+                        <i class="fas fa-sync-alt me-1"></i> Updated: {% now "j M Y" %}
+                    </span>
+                    <button class="btn btn-sm btn-outline-primary">
+                        <i class="fas fa-download me-1"></i> Export
+                    </button>
+                </div>
+            </div>
+        </nav>
+
+        {% block content %}{% endblock %}
+
+        <footer class="footer">
+            © 2025 Mombasa Tea Auction Research | ChaiIntel
+        </footer>
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-zoom@2.0.0"></script>
+    {% block extra_js %}{% endblock %}
+</body>
+</html>

@@ -1,0 +1,365 @@
+{% extends 'analytics/base.html' %}
+
+{% block title %}Dashboard | ChaiIntel{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center mb-4">
+    <h2 class="mb-0">Market Overview</h2>
+    <div>
+        <span class="badge badge-tea me-2">
+            <i class="fas fa-calendar-alt me-1"></i> Last 12 Months
+        </span>
+        <div class="btn-group">
+            <button class="btn btn-sm btn-outline-secondary">Daily</button>
+            <button class="btn btn-sm btn-outline-secondary active">Weekly</button>
+            <button class="btn btn-sm btn-outline-secondary">Monthly</button>
+        </div>
+    </div>
+</div>
+
+<div class="row">
+    <div class="col-lg-6">
+        <div class="card highlight-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-chart-line me-2"></i>Kenyan Tea Price Forecast</span>
+                <button class="btn btn-sm btn-outline-primary">View Details</button>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="priceChart" aria-label="Kenya Export Price Forecast"></canvas>
+                </div>
+                <div class="mt-3 text-muted small">
+                    <i class="fas fa-info-circle me-1"></i> Forecast based on historical data and market trends
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card highlight-card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <span><i class="fas fa-globe-africa me-2"></i>Forecasted Prices by Country</span>
+                <div class="dropdown">
+                    <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
+                        Options
+                    </button>
+                    <ul class="dropdown-menu">
+                        <li><a class="dropdown-item" href="#">Export Data</a></li>
+                        <li><a class="dropdown-item" href="#">Compare Years</a></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="card-body">
+                <div class="chart-container">
+                    <canvas id="countryChart" aria-label="Country-wise Forecast"></canvas>
+                </div>
+                <div class="mt-3 text-muted small">
+                    <i class="fas fa-info-circle me-1"></i> Top 5 export destinations shown
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-trophy me-2"></i>Best Market
+            </div>
+            <div class="card-body text-center py-4">
+                <h3 class="text-success">{{ best_market }}</h3>
+                <p class="mb-0 text-muted">Highest average price</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-chart-bar me-2"></i>Highest Growth
+            </div>
+            <div class="card-body text-center py-4">
+                <h3 class="text-primary">{{ highest_growth_market }}</h3>
+                <p class="mb-0 text-muted">Year-over-year growth</p>
+            </div>
+        </div>
+    </div>
+    <div class="col-md-4">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-tag me-2"></i>Optimal Price
+            </div>
+            <div class="card-body text-center py-4">
+                <h3>${{ optimal_price }}</h3>
+                <p class="mb-0 text-muted">Recommended target price</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card mt-4">
+    <div class="card-header">
+        <i class="fas fa-table me-2"></i>Market Potential Summary
+    </div>
+    <div class="card-body">
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th scope="col">Country</th>
+                        <th scope="col">GDP (Billion USD)</th>
+                        <th scope="col">Population (M)</th>
+                        <th scope="col">Tea Consumption</th>
+                        <th scope="col">Import Duty</th>
+                        <th scope="col">Market Potential</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for market in markets %}
+                    <tr>
+                        <td><strong>{{ market.country }}</strong></td>
+                        <td>{{ market.gdp }}</td>
+                        <td>{{ market.population }}</td>
+                        <td>{{ market.tea_consumption }} kg/capita</td>
+                        <td>{{ market.import_duty }}%</td>
+                        <td>
+                            <span class="badge 
+                                {% if market.market_potential == 'High' %}bg-success
+                                {% elif market.market_potential == 'Medium' %}bg-warning text-dark
+                                {% else %}bg-secondary{% endif %}">
+                                {{ market.market_potential }}
+                            </span>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+<div class="row mt-4">
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-money-bill-wave me-2"></i>Dynamic Pricing Model Comparison
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 300px;">
+                    <canvas id="pricingModelChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="card">
+            <div class="card-header">
+                <i class="fas fa-balance-scale me-2"></i>Policy Simulation Impact
+            </div>
+            <div class="card-body">
+                <div class="chart-container" style="height: 300px;">
+                    <canvas id="policySimulationChart"></canvas>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    // Custom Chart.js defaults for cleaner look
+    Chart.defaults.color = '#6c757d';
+    Chart.defaults.borderColor = 'rgba(0, 0, 0, 0.05)';
+    Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
+    Chart.defaults.plugins.legend.position = 'bottom';
+    Chart.defaults.plugins.legend.labels.boxWidth = 12;
+    Chart.defaults.plugins.legend.labels.padding = 20;
+    
+    const primaryColor = '#2c8a5a';
+    const accentColor = '#e9c46a';
+    const colors = [
+        primaryColor,
+        '#3a86ff',
+        '#8338ec',
+        '#ff006e',
+        '#fb5607',
+        accentColor
+    ];
+    
+    // Price Chart
+    const priceCtx = document.getElementById('priceChart').getContext('2d');
+    const priceChart = new Chart(priceCtx, {
+        type: 'line',
+        data: {
+            labels: JSON.parse('{{ export_dates|escapejs }}'),
+            datasets: JSON.parse('{{ grade_datasets|escapejs }}').map((dataset, i) => ({
+                ...dataset,
+                borderWidth: 2,
+                borderColor: colors[i % colors.length],
+                backgroundColor: 'transparent',
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                tension: 0.3,
+                fill: false
+            }))
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                },
+                zoom: {
+                    zoom: {
+                        wheel: { enabled: true },
+                        pinch: { enabled: true },
+                        mode: 'xy',
+                    },
+                    pan: {
+                        enabled: true,
+                        mode: 'xy',
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            },
+            scales: {
+                x: { 
+                    grid: { display: false },
+                    title: { display: true, text: 'Timeline', color: '#6c757d' }
+                },
+                y: { 
+                    title: { display: true, text: 'Price (USD/kg)', color: '#6c757d' },
+                    grid: { color: 'rgba(0, 0, 0, 0.03)' }
+                }
+            }
+        }
+    });
+
+    // Country Chart
+    const countryCtx = document.getElementById('countryChart').getContext('2d');
+    const countryChart = new Chart(countryCtx, {
+        type: 'line',
+        data: {
+            labels: JSON.parse('{{ export_dates|escapejs }}'),
+            datasets: JSON.parse('{{ country_datasets|escapejs }}').map((dataset, i) => ({
+                ...dataset,
+                borderWidth: 2,
+                borderColor: colors[i % colors.length],
+                backgroundColor: 'transparent',
+                pointRadius: 0,
+                pointHoverRadius: 5,
+                tension: 0.3,
+                fill: false
+            }))
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            },
+            scales: {
+                x: { 
+                    grid: { display: false },
+                    title: { display: true, text: 'Timeline', color: '#6c757d' }
+                },
+                y: { 
+                    title: { display: true, text: 'Price (USD/kg)', color: '#6c757d' },
+                    grid: { color: 'rgba(0, 0, 0, 0.03)' }
+                }
+            }
+        }
+    });
+
+    // Pricing Model Chart
+    const pricingModelCtx = document.getElementById('pricingModelChart').getContext('2d');
+    const pricingModelChart = new Chart(pricingModelCtx, {
+        type: 'bar',
+        data: {
+            labels: JSON.parse('{{ dynamic_pricing_labels|escapejs }}'),
+            datasets: [{
+                label: 'Total Profit (USD)',
+                data: JSON.parse('{{ dynamic_pricing_values|escapejs }}'),
+                backgroundColor: [primaryColor, '#3a86ff', accentColor],
+                borderColor: ['#fff'],
+                borderWidth: 0,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return '$' + context.raw.toLocaleString();
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { grid: { display: false } },
+                y: { 
+                    grid: { color: 'rgba(0, 0, 0, 0.03)' },
+                    title: { display: true, text: 'Profit (USD)', color: '#6c757d' }
+                }
+            }
+        }
+    });
+
+    // Policy Simulation Chart
+    const policySimulationCtx = document.getElementById('policySimulationChart').getContext('2d');
+    const policySimulationChart = new Chart(policySimulationCtx, {
+        type: 'bar',
+        data: {
+            labels: JSON.parse('{{ policy_labels|escapejs }}'),
+            datasets: [{
+                label: 'Avg Price Growth (%)',
+                data: JSON.parse('{{ policy_values|escapejs }}'),
+                backgroundColor: [primaryColor, accentColor],
+                borderColor: ['#fff'],
+                borderWidth: 0,
+                borderRadius: 4
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: { display: false },
+                tooltip: {
+                    callbacks: {
+                        label: function(context) {
+                            return context.raw + '%';
+                        }
+                    }
+                }
+            },
+            scales: {
+                x: { grid: { display: false } },
+                y: { 
+                    grid: { color: 'rgba(0, 0, 0, 0.03)' },
+                    title: { display: true, text: 'Growth (%)', color: '#6c757d' }
+                }
+            }
+        }
+    });
+</script>
+{% endblock %}

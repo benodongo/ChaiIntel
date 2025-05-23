@@ -1,0 +1,435 @@
+utils.py:
+import pandas as pd
+import numpy as np
+from datetime import datetime
+from prophet import Prophet
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.linear_model import LinearRegression
+
+# --- Data generation (no changes needed here) ---
+def generate_data():
+    dates = pd.date_range(start='2020-01-01', end=datetime.today())
+    return pd.DataFrame({
+        'date': dates,
+        'export_price': np.sin(np.linspace(0, 20, len(dates))) * 50 + 100 + np.random.normal(0, 5, len(dates)),
+        'domestic_production': np.linspace(5000, 8000, len(dates)) + np.random.normal(0, 200, len(dates)),
+        'production_cost': np.linspace(80, 120, len(dates)) + np.random.normal(0, 5, len(dates)),
+        'global_demand': np.cos(np.linspace(0, 15, len(dates))) * 30 + 70 + np.random.normal(0, 10, len(dates))
+    })
+
+# --- Forecasting using Prophet ---
+def forecast_prices(df, periods=365):
+    model = Prophet(weekly_seasonality=True, yearly_seasonality=True)
+    prophet_df = df[['date', 'export_price']].rename(columns={'date': 'ds', 'export_price': 'y'})
+    model.fit(prophet_df)
+    future = model.make_future_dataframe(periods=periods)
+    forecast = model.predict(future)
+    return forecast
+
+# --- Enhanced clustering with more features ---
+def cluster_markets(market_data):
+    features = market_data[['gdp', 'population', 'tea_consumption', 'import_duty', 'distance_km', 'political_risk', 'currency_volatility']]
+    scaler = StandardScaler()
+    scaled_features = scaler.fit_transform(features)
+
+    kmeans = KMeans(n_clusters=3, random_state=42)
+    market_data['cluster'] = kmeans.fit_predict(scaled_features)
+
+    return market_data
+
+# --- Basic optimal price calculation ---
+def calculate_optimal_price(production_cost, competitor_price, demand_factor):
+    margin = 0.25
+    demand_multiplier = 1 + (demand_factor - 0.5)
+    competition_factor = np.clip(competitor_price / production_cost, 0.8, 1.2)
+    return production_cost * (1 + margin) * demand_multiplier * competition_factor
+
+# --- Generate per-country forecasts ---
+def generate_country_forecasts(base_forecast, countries):
+    country_forecasts = {}
+    for country in countries:
+        offset = np.random.uniform(-10, 10)
+        multiplier = np.random.uniform(0.9, 1.1)
+        forecast = base_forecast.copy()
+        forecast['forecast_price'] = (forecast['forecast_price'] + offset) * multiplier
+        country_forecasts[country] = forecast
+    return country_forecasts
+
+# --- Dynamic Pricing Simulation ---
+def simulate_pricing_strategies(production_cost, demand_curve_params, strategies):
+    """
+    Simulates profit under multiple pricing strategies.
+    demand_curve_params: (a, b) where demand = a - b*price
+    strategies: list of markup percentages e.g. [0.1, 0.2, 0.3]
+    Returns dict {markup: expected_profit}
+    """
+    a, b = demand_curve_params
+    results = {}
+    for markup in strategies:
+        price = production_cost * (1 + markup)
+        demand = max(a - b * price, 0)
+        profit = (price - production_cost) * demand
+        results[markup] = profit
+    return results
+
+# --- Buyer Behavior Prediction ---
+def predict_buyer_behavior(market_data):
+    """
+    Predicts future tea consumption based on simple linear regression
+    on current GDP and tea consumption.
+    """
+    X = market_data[['gdp']]
+    y = market_data['tea_consumption']
+    model = LinearRegression()
+    model.fit(X, y)
+    market_data['predicted_tea_consumption'] = model.predict(X)
+    return market_data
+
+# --- Policy Simulation (hypothetical impact of new auction rules) ---
+def simulate_policy_impact(export_data, reserve_price_increase=5, payment_speed_bonus=0.02):
+    """
+    Simulate how auction price might change if reserve price increased
+    and payments are faster.
+    """
+    adjusted = export_data.copy()
+    adjusted['export_price'] += reserve_price_increase
+    adjusted['export_price'] *= (1 + payment_speed_bonus)
+    return adjusted
+
+
+views.py
+from django.shortcuts import render, redirect
+from django.core.files.storage import FileSystemStorage
+import pandas as pd
+import json
+from .utils import (
+    generate_data, forecast_prices, cluster_markets,
+    calculate_optimal_price, generate_country_forecasts,
+    simulate_pricing_strategies, predict_buyer_behavior,
+    simulate_policy_impact
+)
+
+def upload_csv(request):
+    if request.method == 'POST' and request.FILES.get('csv_file'):
+        csv_file = request.FILES['csv_file']
+        if not csv_file.name.endswith('.csv'):
+            return render(request, 'analytics/dashboard.html', {'error': 'Please upload a CSV file.'})
+
+        fs = FileSystemStorage()
+        filename = fs.save(csv_file.name, csv_file)
+        uploaded_file_path = fs.url(filename)
+        request.session['uploaded_csv'] = uploaded_file_path
+        return redirect('chaiintel_dashboard')
+
+    return redirect('chaiintel_dashboard')
+
+def load_data(request):
+    if request.session.get('uploaded_csv'):
+        uploaded_csv_path = request.session['uploaded_csv']
+        try:
+            data = pd.read_csv('.' + uploaded_csv_path)
+            if not {'date', 'export_price'}.issubset(data.columns):
+                raise ValueError("Uploaded CSV missing required columns.")
+            data['date'] = pd.to_datetime(data['date'])
+            return data
+        except Exception as e:
+            print(f"CSV loading error: {e}")
+            return generate_data()
+    else:
+        return generate_data()
+
+def chaiintel_dashboard(request):
+    export_data = load_data(request)
+
+    # Forecast base prices
+    base_forecast = forecast_prices(export_data)
+    base_forecast = base_forecast[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': 'forecast_price'})
+
+    merged = pd.merge(export_data, base_forecast, on='date', how='outer').sort_values('date')
+
+    # Define markets with extra features
+    market_data = pd.DataFrame({
+        'country': ['Pakistan', 'Egypt', 'UK', 'UAE', 'USA', 'Russia'],
+        'gdp': [348.7, 435.6, 3131, 501.3, 22675, 1833],
+        'population': [242, 109, 68, 10, 332, 146],
+        'tea_consumption': [1.8, 0.9, 1.2, 0.7, 0.4, 0.6],
+        'import_duty': [10.5, 15.0, 6.5, 8.2, 5.0, 12.5],
+        'distance_km': [4300, 3200, 6700, 3800, 12500, 7100],
+        'political_risk': [0.6, 0.7, 0.2, 0.4, 0.1, 0.5],
+        'currency_volatility': [0.3, 0.5, 0.2, 0.4, 0.1, 0.6],
+    })
+
+    # Cluster with extra features
+    clustered_markets = cluster_markets(market_data)
+
+    countries = list(market_data['country'])
+
+    # Forecast per country
+    country_forecasts_raw = generate_country_forecasts(base_forecast, countries)
+
+    # Kenya optimal pricing
+    kenya_cost = 85
+    pakistan_competitor_price = 110
+    demand_factor = 0.8
+    optimal_price = calculate_optimal_price(kenya_cost, pakistan_competitor_price, demand_factor)
+
+    # Simulate pricing strategies
+    pricing_strategies = simulate_pricing_strategies(kenya_cost, (1500, 5), strategies=[0.1, 0.2, 0.3, 0.4])
+
+    # Predict future buyer behavior
+    buyer_predictions = predict_buyer_behavior(market_data)
+
+    # Simulate policy impact
+    policy_simulation = simulate_policy_impact(export_data)
+
+    # KPIs
+    avg_prices = {c: forecasts['forecast_price'].mean() for c, forecasts in country_forecasts_raw.items()}
+    best_market = min(avg_prices, key=avg_prices.get)
+    highest_growth_market = max(avg_prices, key=avg_prices.get)
+
+    colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40']
+    country_datasets = []
+
+    for idx, country in enumerate(countries):
+        dataset = {
+            'label': country,
+            'data': list(country_forecasts_raw[country]['forecast_price']),  # No fillna here
+            'borderColor': colors[idx % len(colors)],
+            'fill': False,
+            'tension': 0.4
+        }
+        country_datasets.append(dataset)
+
+        context = {
+            'export_dates': json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
+            'export_prices': json.dumps(list(merged['export_price'])),  # No fillna
+            'forecast_prices': json.dumps(list(merged['forecast_price'])),
+            'markets': clustered_markets.to_dict('records'),
+            'optimal_price': round(optimal_price, 2),
+            'countries': countries,
+            'country_datasets': json.dumps(country_datasets),
+            'best_market': best_market,
+            'highest_growth_market': highest_growth_market,
+            'pricing_strategies': pricing_strategies,
+            'buyer_predictions': buyer_predictions.to_dict('records'),
+            'policy_simulation_prices': json.dumps(list(policy_simulation['export_price'])),
+            # 🛠 Add these:
+            'dynamic_pricing_labels': json.dumps(list(pricing_strategies.keys())),
+            'dynamic_pricing_values': json.dumps(list(pricing_strategies.values())),
+            'policy_labels': json.dumps(list(policy_simulation['date'].dt.strftime('%Y-%m-%d'))),
+            'policy_values': json.dumps(list(policy_simulation['export_price'])),
+        }
+
+
+
+    return render(request, 'analytics/dashboard.html', context)
+
+
+dashboard.html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>ChaiIntel Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', sans-serif;
+            background: #f9f9f9;
+            margin: 20px;
+            color: #333;
+        }
+        h1 {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+        }
+        .card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 0 8px rgba(0,0,0,0.05);
+        }
+        canvas {
+            width: 100% !important;
+            height: auto !important;
+        }
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+        }
+        table, th, td {
+            border: 1px solid #ddd;
+        }
+        th, td {
+            padding: 10px;
+            text-align: left;
+        }
+        th {
+            background: #eee;
+        }
+    </style>
+</head>
+<body>
+    <h1>ChaiIntel - Kenya Tea Export Intelligence</h1>
+
+    <div class="container">
+        <div class="card">
+            <h2>Kenyan Tea Price Forecast</h2>
+            <canvas id="priceChart"></canvas>
+        </div>
+        <div class="card">
+            <h2>Forecasted Prices by Country</h2>
+            <canvas id="countryChart"></canvas>
+        </div>
+    </div>
+
+    <div class="card" style="margin-top: 40px;">
+        <h2>Market Opportunities</h2>
+        <p><strong>Best Market:</strong> {{ best_market }} | <strong>Highest Growth Market:</strong> {{ highest_growth_market }}</p>
+        <p><strong>Optimal Price to Compete:</strong> ${{ optimal_price }}</p>
+        <table>
+            <thead>
+                <tr>
+                    <th>Country</th>
+                    <th>GDP (Billion USD)</th>
+                    <th>Population (M)</th>
+                    <th>Tea Consumption (kg/capita)</th>
+                    <th>Import Duty (%)</th>
+                    <th>Market Potential Cluster</th>
+                </tr>
+            </thead>
+            <tbody>
+                {% for market in markets %}
+                <tr>
+                    <td>{{ market.country }}</td>
+                    <td>{{ market.gdp }}</td>
+                    <td>{{ market.population }}</td>
+                    <td>{{ market.tea_consumption }}</td>
+                    <td>{{ market.import_duty }}</td>
+                    <td>{{ market.market_potential }}</td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+    </div>
+
+    <!-- NEW Simulation Results Section -->
+    <div class="container" style="margin-top: 60px;">
+        <div class="card">
+            <h2>Dynamic Pricing Model Comparison</h2>
+            <p>This chart compares total expected profits under different pricing models applied to forecasted demand.</p>
+            <canvas id="pricingModelChart"></canvas>
+        </div>
+
+        <div class="card">
+            <h2>Policy Simulation Impact</h2>
+            <p>Impact of different auction or export policy changes on expected price growth.</p>
+            <canvas id="policySimulationChart"></canvas>
+        </div>
+    </div>
+
+    <script>
+        // Tea Price Forecast
+        const ctx = document.getElementById('priceChart').getContext('2d');
+        const priceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: JSON.parse('{{ export_dates|escapejs }}'),
+                datasets: [{
+                    label: 'Kenya Export Price Forecast',
+                    data: JSON.parse('{{ forecast_prices|escapejs }}'),
+                    borderColor: '#4CAF50',
+                    fill: false,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                plugins: {
+                    legend: { position: 'bottom' }
+                },
+                scales: {
+                    x: { title: { display: true, text: 'Date' }},
+                    y: { title: { display: true, text: 'Price (USD/kg)' }}
+                }
+            }
+        });
+    
+        // Forecasted Prices by Country
+        const ctx2 = document.getElementById('countryChart').getContext('2d');
+        const countryChart = new Chart(ctx2, {
+            type: 'line',
+            data: {
+                labels: JSON.parse('{{ export_dates|escapejs }}'),
+                datasets: JSON.parse('{{ country_datasets|escapejs }}')
+            },
+            options: {
+                plugins: {
+                    legend: { position: 'bottom' }
+                },
+                scales: {
+                    x: { title: { display: true, text: 'Date' }},
+                    y: { title: { display: true, text: 'Price (USD/kg)' }}
+                }
+            }
+        });
+    
+        // Dynamic Pricing Model Comparison
+        const ctx3 = document.getElementById('pricingModelChart').getContext('2d');
+        const pricingModelChart = new Chart(ctx3, {
+            type: 'bar',
+            data: {
+                labels: JSON.parse('{{ dynamic_pricing_labels|escapejs }}'),
+                datasets: [{
+                    label: 'Total Profit (USD)',
+                    data: JSON.parse('{{ dynamic_pricing_values|escapejs }}'),
+                    backgroundColor: ['#4CAF50', '#2196F3', '#FF9800']
+                }]
+            },
+            options: {
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        title: { display: true, text: 'Profit (USD)' },
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    
+        // Policy Simulation Impact
+        const ctx4 = document.getElementById('policySimulationChart').getContext('2d');
+        const policySimulationChart = new Chart(ctx4, {
+            type: 'bar',
+            data: {
+                labels: JSON.parse('{{ policy_labels|escapejs }}'),
+                datasets: [{
+                    label: 'Avg Price Growth (%)',
+                    data: JSON.parse('{{ policy_values|escapejs }}'),
+                    backgroundColor: ['#673AB7', '#E91E63']
+                }]
+            },
+            options: {
+                plugins: {
+                    legend: { display: false }
+                },
+                scales: {
+                    y: {
+                        title: { display: true, text: 'Growth %' },
+                        beginAtZero: true
+                    }
+                }
+            }
+        });
+    </script>
+    
+</body>
+</html>
