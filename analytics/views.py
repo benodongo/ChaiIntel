@@ -1,182 +1,173 @@
-from django.shortcuts import render, redirect
-from django.core.files.storage import FileSystemStorage
+from django.shortcuts import render
 import pandas as pd
 import json
-import numpy as np  # Important: numpy is needed
-from .utils import (
-    generate_data, forecast_prices, cluster_markets,
-    calculate_optimal_price, generate_country_forecasts,
-    simulate_pricing_strategies, predict_buyer_behavior,
-    simulate_policy_impact, generate_price_forecast, generate_country_datasets,
-    simulate_dynamic_pricing, simulate_weather_impact, simulate_regulatory_changes,
-    simulate_market_opportunities, recommend_sale_timing, benchmark_against_traditional,
-    simulate_risk_assessment, model_competitor_behavior, generate_scenario_comparison
-)
-
-def upload_csv(request):
-    if request.method == 'POST' and request.FILES.get('csv_file'):
-        csv_file = request.FILES['csv_file']
-        if not csv_file.name.endswith('.csv'):
-            return render(request, 'analytics/dashboard.html', {'error': 'Please upload a CSV file.'})
-
-        fs = FileSystemStorage()
-        filename = fs.save(csv_file.name, csv_file)
-        uploaded_file_path = fs.url(filename)
-        request.session['uploaded_csv'] = uploaded_file_path
-        return redirect('chaiintel_dashboard')
-
-    return redirect('chaiintel_dashboard')
-
-def load_data(request):
-    if request.session.get('uploaded_csv'):
-        uploaded_csv_path = request.session['uploaded_csv']
-        try:
-            data = pd.read_csv('.' + uploaded_csv_path)
-            if not {'date', 'export_price'}.issubset(data.columns):
-                raise ValueError("Uploaded CSV missing required columns.")
-            data['date'] = pd.to_datetime(data['date'])
-            return data
-        except Exception as e:
-            print(f"CSV loading error: {e}")
-            return generate_data()
-    else:
-        return generate_data()
-
-def safe_to_list(obj):
-    """Convert numpy arrays to lists for JSON serialization."""
-    if isinstance(obj, np.ndarray):
-        return obj.tolist()
-    return obj
+import numpy as np
+from .utils import load_historical_data, forecast_prices
 
 def dashboard(request):
-    export_data = load_data(request)
+    # Load and prepare data
+    export_data = load_historical_data()
     base_forecast = forecast_prices(export_data)
-    #base_forecast = base_forecast[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': 'forecast_price'})
-    bp_forecast = base_forecast[['date', 'forecast_BP']].rename(columns={'forecast_BP': 'forecast_price'})
+    
+    # Merge actual and forecast data
     merged = pd.merge(export_data, base_forecast, on='date', how='outer').sort_values('date')
-
-    market_data = pd.DataFrame({
-        'country': ['Pakistan', 'Egypt', 'UK', 'UAE', 'USA', 'Russia'],
-        'gdp': [348.7, 435.6, 3131, 501.3, 22675, 1833],
-        'population': [242, 109, 68, 10, 332, 146],
-        'tea_consumption': [1.8, 0.9, 1.2, 0.7, 0.4, 0.6],
-        'import_duty': [10.5, 15.0, 6.5, 8.2, 5.0, 12.5],
-        'distance_km': [4300, 3200, 6700, 3800, 12500, 7100],
-        'political_risk': [0.6, 0.7, 0.2, 0.4, 0.1, 0.5],
-        'currency_volatility': [0.3, 0.5, 0.2, 0.4, 0.1, 0.6],
-    })
-    # Prepare datasets for each grade's chart
-    grades = ['BP', 'PF', 'FNGS', 'DUST', 'BMF']
+    
+    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
     colors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF']
     grade_datasets = []
-
+    
     for idx, grade in enumerate(grades):
-        # Actual and forecast data
-        actual_prices = merged[grade].fillna(0).tolist()
-        grade_forecast_prices  = merged[f'forecast_{grade}'].fillna(0).tolist()
+        # Actual prices - keep None for missing values
+        actual_prices = [val if not pd.isna(val) else None for val in merged[grade]]
         
-        # Add datasets for actual and forecast
+        # Forecast values - ensure they're never zero or negative
+        forecast_col = f'forecast_{grade}'
+        if forecast_col in merged.columns:
+            forecast_values = []
+            for val in merged[forecast_col]:
+                if pd.isna(val):
+                    forecast_values.append(None)
+                else:
+                    # Ensure minimum viable price
+                    forecast_values.append(max(val, 50))  # Minimum 50 units
+        else:
+            forecast_values = [None] * len(merged)
+        
+        # Add actual price line
         grade_datasets.append({
             'label': f'{grade} Actual',
             'data': actual_prices,
             'borderColor': colors[idx],
-            'borderDash': [5, 5],
-            'fill': False
+            'backgroundColor': colors[idx] + '20',  # Add transparency
+            'borderWidth': 3,
+            'pointRadius': 5,
+            'pointHoverRadius': 7,
+            'fill': False,
+            'tension': 0.1
         })
+        
+        # Add forecast line
         grade_datasets.append({
             'label': f'{grade} Forecast',
-            'data': grade_forecast_prices,
+            'data': forecast_values,
             'borderColor': colors[idx],
-            'fill': False
-        })
-
-
-    clustered_markets = cluster_markets(market_data)
-    countries = list(market_data['country'])
-
-    country_forecasts_raw = generate_country_forecasts(bp_forecast, countries)
-
-    kenya_cost = 85
-    competitor_price = 110
-    demand_factor = 0.8
-    optimal_price = calculate_optimal_price(kenya_cost, competitor_price, demand_factor)
-    pricing_strategies = simulate_pricing_strategies(kenya_cost, (1500, 5), strategies=[0.1, 0.2, 0.3, 0.4])
-
-    buyer_predictions = predict_buyer_behavior(market_data)
-    #policy_simulation = simulate_policy_impact(export_data)
-    avg_prices = {c: forecasts['forecast_price'].mean() for c, forecasts in country_forecasts_raw.items()}
-    best_market = min(avg_prices, key=avg_prices.get)
-    highest_growth_market = max(avg_prices, key=avg_prices.get)
-
-    country_datasets = []
-    colors = ['#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0', '#9966FF', '#FF9F40']
-    for idx, country in enumerate(countries):
-        dataset = {
-            'label': country,
-            'data': list(country_forecasts_raw[country]['forecast_price'].fillna(0)),
-            'borderColor': colors[idx % len(colors)],
+            'backgroundColor': colors[idx] + '10',
+            'borderDash': [8, 4],
+            'borderWidth': 2,
+            'pointRadius': 3,
+            'pointHoverRadius': 5,
             'fill': False,
-            'tension': 0.4
-        }
-        country_datasets.append(dataset)
-
-    # Advanced Simulations
-    months, forecast_prices_line = generate_price_forecast()
-    traditional_prices, accuracy = benchmark_against_traditional(forecast_prices_line)
-    sale_recommendation = recommend_sale_timing(forecast_prices_line)
-    weather_impact = simulate_weather_impact()
-    regulation_changes = simulate_regulatory_changes()
-    dynamic_models, dynamic_profits = simulate_dynamic_pricing()
-    risks = simulate_risk_assessment()
-    competitors, avg_competitor_price = model_competitor_behavior()
-    buyer_model_data = predict_buyer_behavior(market_data).to_dict('records')
-    opportunities = simulate_market_opportunities()
-    scenario_labels, scenario_values = generate_scenario_comparison()
-
-    # SAFETY: Convert numpy arrays before JSON serialization
-    forecast_prices_line = safe_to_list(forecast_prices_line)
-    traditional_prices = safe_to_list(traditional_prices)
-    weather_impact = safe_to_list(weather_impact)
-    dynamic_models = safe_to_list(dynamic_models)
-    dynamic_profits = safe_to_list(dynamic_profits)
-    risks = safe_to_list(risks)
-    scenario_values = safe_to_list(scenario_values)
-
+            'tension': 0.2
+        })
+        
+        # Add confidence intervals if available
+        lower_col = f'forecast_{grade}_lower'
+        upper_col = f'forecast_{grade}_upper'
+        
+        if lower_col in merged.columns and upper_col in merged.columns:
+            # Lower confidence bound
+            lower_values = [val if not pd.isna(val) else None for val in merged[lower_col]]
+            upper_values = [val if not pd.isna(val) else None for val in merged[upper_col]]
+            
+            grade_datasets.append({
+                'label': f'{grade} Confidence Range',
+                'data': upper_values,
+                'borderColor': colors[idx] + '40',
+                'backgroundColor': colors[idx] + '15',
+                'borderWidth': 1,
+                'pointRadius': 0,
+                'fill': '+1',  # Fill to previous dataset (lower bound)
+                'tension': 0.2
+            })
+            
+            grade_datasets.append({
+                'label': f'{grade} Lower Bound',
+                'data': lower_values,
+                'borderColor': colors[idx] + '40',
+                'backgroundColor': colors[idx] + '15',
+                'borderWidth': 1,
+                'pointRadius': 0,
+                'fill': False,
+                'tension': 0.2
+            })
+    
+    # Calculate summary statistics for the template
+    summary_stats = []
+    for grade in grades:
+        actual_data = merged[grade].dropna()
+        forecast_col = f'forecast_{grade}'
+        
+        if len(actual_data) > 0:
+            current_price = actual_data.iloc[-1] if len(actual_data) > 0 else 0
+            
+            # Get next month's forecast
+            future_forecasts = merged[merged['date'] > export_data['date'].max()][forecast_col].dropna()
+            next_forecast = future_forecasts.iloc[0] if len(future_forecasts) > 0 else current_price
+            
+            # Calculate trend
+            if len(actual_data) >= 2:
+                trend = ((actual_data.iloc[-1] - actual_data.iloc[-2]) / actual_data.iloc[-2]) * 100
+            else:
+                trend = 0
+            
+            summary_stats.append({
+                'grade': grade,
+                'current_price': round(current_price, 2),
+                'next_forecast': round(max(next_forecast, 50), 2),  # Ensure minimum
+                'trend': round(trend, 1),
+                'min_historical': round(actual_data.min(), 2),
+                'max_historical': round(actual_data.max(), 2),
+                'avg_historical': round(actual_data.mean(), 2)
+            })
+    
     context = {
         'export_dates': json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
         'grade_datasets': json.dumps(grade_datasets),
-        #'export_prices': json.dumps(list(merged['export_price'].fillna(0))),
-       # 'forecast_prices': json.dumps(list(merged['forecast_price'].fillna(0))),
-        'markets': clustered_markets.to_dict('records'),
-        'optimal_price': round(optimal_price, 2),
-        'countries': countries,
-        'country_datasets': json.dumps(country_datasets),
-        'best_market': best_market,
-        'highest_growth_market': highest_growth_market,
-        'pricing_strategies': pricing_strategies,
-        'buyer_predictions': buyer_predictions.to_dict('records'),
-        #'policy_simulation_prices': json.dumps(list(policy_simulation['export_price'].fillna(0))),
-        'dynamic_pricing_labels': json.dumps([f"{int(k * 100)}%" for k in pricing_strategies.keys()]),
-        'dynamic_pricing_values': json.dumps(list(pricing_strategies.values())),
-        #'policy_labels': json.dumps(list(policy_simulation['date'].dt.strftime('%Y-%m-%d'))),
-        #'policy_values': json.dumps(list(policy_simulation['export_price'].fillna(0))),
-        # Advanced
-        'months': json.dumps(months),
-        'forecast_prices_line': json.dumps(forecast_prices_line),
-        'traditional_prices': json.dumps(traditional_prices),
-        'forecast_accuracy': json.dumps(accuracy),
-        'sale_recommendation': sale_recommendation,
-        'weather_impact': json.dumps(weather_impact),
-        'regulation_changes': regulation_changes,
-        'dynamic_models': json.dumps(dynamic_models),
-        'dynamic_profits': json.dumps(dynamic_profits),
-        'risks': json.dumps(risks),
-        'competitors': competitors,
-        'avg_competitor_price': avg_competitor_price,
-        'buyer_model_data': buyer_model_data,
-        'market_opportunities': opportunities,
-        'scenario_labels': json.dumps(scenario_labels),
-        'scenario_values': json.dumps(scenario_values),
+        'grades': grades,
+        'summary_stats': summary_stats,
+        'total_data_points': len(export_data),
+        'forecast_months': 12
     }
-
+    
     return render(request, 'analytics/dashboard.html', context)
+
+def api_forecast_single_grade(request, grade):
+    """API endpoint to get forecast for a single grade."""
+    if grade not in ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2']:
+        return JsonResponse({'error': 'Invalid grade'}, status=400)
+    
+    # Convert URL-safe grade name back
+    grade_name = grade.replace('_', ' ').replace('FNGS 1 2', 'FNGS 1/2').replace('DUST 1 2', 'DUST 1/2')
+    
+    export_data = load_historical_data()
+    forecasts = forecast_prices(export_data, periods=6)  # 6-month forecast for API
+    
+    merged = pd.merge(export_data, forecasts, on='date', how='outer').sort_values('date')
+    
+    forecast_col = f'forecast_{grade_name}'
+    if forecast_col not in merged.columns:
+        return JsonResponse({'error': 'Forecast not available'}, status=404)
+    
+    # Prepare response data
+    response_data = {
+        'grade': grade_name,
+        'historical': [],
+        'forecast': []
+    }
+    
+    for _, row in merged.iterrows():
+        date_str = row['date'].strftime('%Y-%m-%d')
+        
+        if not pd.isna(row[grade_name]):
+            response_data['historical'].append({
+                'date': date_str,
+                'price': round(row[grade_name], 2)
+            })
+        
+        if not pd.isna(row[forecast_col]):
+            response_data['forecast'].append({
+                'date': date_str,
+                'price': round(max(row[forecast_col], 50), 2)  # Ensure minimum
+            })
+    
+    return JsonResponse(response_data)

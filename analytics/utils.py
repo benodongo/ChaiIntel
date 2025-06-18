@@ -1,263 +1,226 @@
-import random
-from datetime import datetime, timedelta
-
 import numpy as np
 import pandas as pd
 from prophet import Prophet
-from sklearn.cluster import KMeans
-from sklearn.linear_model import LinearRegression
-from sklearn.preprocessing import StandardScaler
+import logging
 
+# Suppress Prophet warnings for cleaner output
+logging.getLogger('prophet').setLevel(logging.WARNING)
 
-# --- Simulated Data Generators ---
-def simulate_weather_impact(n=12):
-    """Simulate monthly weather impacts as percentage changes."""
-    return np.round(np.random.normal(0, 2, n), 2)
-
-
-def simulate_regulatory_changes(n=12):
-    """Simulate monthly regulatory changes."""
-    options = ['None', 'Mild Restriction', 'Major Policy Shift']
-    return [random.choice(options) for _ in range(n)]
-
-
-def simulate_competitor_behavior(n=5):
-    """Simulate competitor pricing behavior."""
-    return [{'country': f'Competitor {i+1}', 'price': round(random.uniform(2.5, 3.5), 2)} for i in range(n)]
-
-
-def generate_data():
-    """Generate simulated export data for each tea grade with realistic fluctuations."""
-    dates = pd.date_range(start='2020-01-01', end=datetime.today())
-    num_dates = len(dates)
-    
-    # Current prices for each grade
-    current_prices = {
-        'BP': 160,
-        'PF': 155,
-        'FNGS': 120,
-        'DUST': 100,
-        'BMF': 80
+# --- Historical Data Loader ---
+def load_historical_data():
+    """Load historical tea auction data and ensure it's sorted chronologically."""
+    data = {
+        'Month': ['May-22', 'Jun-24', 'May-24', 'Aug-24', 'Dec-24', 'Jan-25', 'Apr-25', 'May-25'],
+        'Auction_No': ['2022/20', '2024/26', '2024/22', '2024/35', '2024/51', '2025/01', '2025/16', '2025/21'],
+        'BP1': [265, 256, 259, 287, 268, 277, 201, 176],
+        'PF1': [260, 280, 280, 291, 277, 281, 239, 228],
+        'DUST1': [269, 272, 276, 284, 258, 255, 250, 229],
+        'FNGS 1/2': [150, 132, 130, 291, 129, 251, 140, 126],
+        'DUST 1/2': [177, 148, 162, 149, 144, 144, 134, 126],
     }
     
-    data = {'date': dates}
+    df = pd.DataFrame(data)
+    df['date'] = pd.to_datetime(df['Month'], format='%b-%y')
     
-    # Simulate historical data for each grade with seasonal fluctuations
-    for grade, price in current_prices.items():
-        # Base trend from 80% to 120% of current price to allow for ups and downs
-        base_trend = np.linspace(price * 0.8, price * 1.2, num_dates)
-        
-        # Add seasonal patterns (quarterly and yearly cycles)
-        time_period = np.linspace(0, 10, num_dates)
-        seasonal = (
-            np.sin(time_period * 2 * np.pi) * 10 +  # Yearly cycle
-            np.sin(time_period * 8 * np.pi) * 5 +   # Quarterly cycle
-            np.random.normal(0, 8, num_dates)       # Random noise
-        )
-        
-        # Combine components
-        historical = base_trend + seasonal
-        data[grade] = np.round(historical, 2)
-    
-    # Other simulated columns with more realistic fluctuations
-    time_period = np.linspace(0, 10, num_dates)
-    seasonal_pattern = np.sin(time_period * 2 * np.pi) * 0.2 + 0.8  # Oscillates between 60% and 100%
-    
-    data.update({
-        'domestic_production': (np.linspace(5000, 8000, num_dates) * 
-                               seasonal_pattern + 
-                               np.random.normal(0, 300, num_dates)),
-        'production_cost': (np.linspace(80, 120, num_dates) + 
-                          np.sin(time_period * 4 * np.pi) * 15 +
-                          np.random.normal(0, 8, num_dates)),
-        'global_demand': (np.cos(np.linspace(0, 15, num_dates)) * 30 + 70 + 
-                         np.random.normal(0, 15, num_dates))
-    })
-    
-    return pd.DataFrame(data)
+    # Sort by date
+    df = df[['date', 'BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']].sort_values('date')
+    return df
 
-# --- Forecasting ---
-def forecast_prices(df, periods=365):
-    """Forecast prices for each tea grade using Prophet."""
-    grades = ['BP', 'PF', 'FNGS', 'DUST', 'BMF']
+def calculate_price_bounds(historical_prices):
+    """Calculate reasonable price bounds based on historical data."""
+    mean_price = np.mean(historical_prices)
+    std_price = np.std(historical_prices)
+    min_price = np.min(historical_prices)
+    
+    # Set floor as 60% of historical minimum or mean - 2*std, whichever is higher
+    floor_price = max(min_price * 0.6, mean_price - 2 * std_price, 50)  # Absolute minimum of 50
+    
+    # Set ceiling as 150% of historical maximum
+    ceiling_price = np.max(historical_prices) * 1.5
+    
+    return floor_price, ceiling_price
+
+def enhance_data_with_smoothing(df, grade):
+    """Apply exponential smoothing to reduce volatility in limited data."""
+    prices = df[grade].dropna()
+    if len(prices) < 3:
+        return df
+    
+    # Apply exponential smoothing with alpha=0.3 for moderate smoothing
+    smoothed = prices.ewm(alpha=0.3).mean()
+    
+    # Create enhanced dataset with both original and smoothed values
+    enhanced_df = df.copy()
+    enhanced_df[f'{grade}_smoothed'] = smoothed
+    
+    return enhanced_df
+
+def forecast_prices_robust(df, periods=12):
+    """
+    Robust forecasting with multiple safeguards against negative/zero predictions.
+    """
+    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
     forecasts = pd.DataFrame()
     
     for grade in grades:
-        # Prepare data for Prophet
-        prophet_df = df[['date', grade]].rename(columns={'date': 'ds', grade: 'y'})
-        
-        # Train model
-        model = Prophet(weekly_seasonality=True, yearly_seasonality=True)
-        model.fit(prophet_df)
-        
-        # Generate future dates
-        future = model.make_future_dataframe(periods=periods)
-        grade_forecast = model.predict(future)
-        
-        # Extract relevant forecast columns
-        forecast = grade_forecast[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': f'forecast_{grade}'})
-        
-        # Merge forecasts
-        if forecasts.empty:
-            forecasts = forecast
-        else:
-            forecasts = pd.merge(forecasts, forecast, on='date', how='outer')
+        try:
+            # Prepare data and calculate bounds
+            prophet_df = df[['date', grade]].rename(columns={'date': 'ds', grade: 'y'}).dropna()
+            
+            if len(prophet_df) < 3:
+                print(f"Warning: Insufficient data for {grade}, using fallback method")
+                forecast = create_fallback_forecast(df, grade, periods)
+            else:
+                # Calculate price bounds
+                floor_price, ceiling_price = calculate_price_bounds(prophet_df['y'])
+                
+                # Configure Prophet with custom parameters for limited data
+                model = Prophet(
+                    yearly_seasonality=False,  # Disable with limited data
+                    weekly_seasonality=False,
+                    daily_seasonality=False,
+                    seasonality_mode='additive',
+                    changepoint_prior_scale=0.1,  # Reduce overfitting
+                    seasonality_prior_scale=0.1,
+                    interval_width=0.8
+                )
+                
+                # Add custom seasonality if we have enough data points
+                if len(prophet_df) >= 6:
+                    model.add_seasonality(name='custom_trend', period=365.25/4, fourier_order=2)
+                
+                model.fit(prophet_df)
+                
+                # Create future dataframe
+                future = model.make_future_dataframe(periods=periods, freq='M')
+                forecast_df = model.predict(future)
+                
+                # Apply multiple layers of protection against unrealistic values
+                
+                # 1. Clip to calculated bounds
+                forecast_df['yhat'] = forecast_df['yhat'].clip(lower=floor_price, upper=ceiling_price)
+                
+                # 2. Apply trend dampening for future predictions
+                last_actual = prophet_df['y'].iloc[-1]
+                future_mask = forecast_df['ds'] > prophet_df['ds'].max()
+                
+                if future_mask.any():
+                    # Gradually converge forecast towards recent average
+                    recent_avg = prophet_df['y'].tail(3).mean()
+                    future_forecasts = forecast_df.loc[future_mask, 'yhat']
+                    
+                    # Apply dampening factor that increases over time
+                    dampening_factors = np.linspace(0.1, 0.5, len(future_forecasts))
+                    dampened_forecasts = (future_forecasts * (1 - dampening_factors) + 
+                                        recent_avg * dampening_factors)
+                    
+                    forecast_df.loc[future_mask, 'yhat'] = dampened_forecasts
+                
+                # 3. Final safety check - ensure minimum viable price
+                min_viable_price = max(floor_price, last_actual * 0.5)
+                forecast_df['yhat'] = forecast_df['yhat'].clip(lower=min_viable_price)
+                
+                forecast = forecast_df[['ds', 'yhat']].rename(columns={'ds': 'date', 'yhat': f'forecast_{grade}'})
+            
+            # Merge forecasts
+            if forecasts.empty:
+                forecasts = forecast
+            else:
+                forecasts = pd.merge(forecasts, forecast, on='date', how='outer')
+                
+        except Exception as e:
+            print(f"Error forecasting {grade}: {e}")
+            # Use fallback method
+            forecast = create_fallback_forecast(df, grade, periods)
+            if forecasts.empty:
+                forecasts = forecast
+            else:
+                forecasts = pd.merge(forecasts, forecast, on='date', how='outer')
     
     return forecasts
 
+def create_fallback_forecast(df, grade, periods):
+    """
+    Fallback forecasting method using simple trend analysis.
+    """
+    prices = df[grade].dropna()
+    dates = df.loc[df[grade].notna(), 'date']
+    
+    if len(prices) == 0:
+        # If no data, use market average
+        base_price = 200
+    elif len(prices) == 1:
+        base_price = prices.iloc[0]
+    else:
+        # Calculate simple trend
+        base_price = prices.iloc[-1]
+        if len(prices) >= 2:
+            trend = (prices.iloc[-1] - prices.iloc[0]) / len(prices)
+            # Dampen extreme trends
+            trend = np.clip(trend, -5, 5)
+        else:
+            trend = 0
+    
+    # Generate future dates
+    last_date = df['date'].max()
+    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), periods=periods, freq='M')
+    
+    # Create conservative forecast
+    forecasts = []
+    for i, future_date in enumerate(future_dates):
+        # Apply dampened trend with noise reduction
+        forecast_price = base_price + (trend * (i + 1) * 0.5)  # Reduce trend impact
+        
+        # Add small random variation but keep it conservative
+        variation = np.random.normal(0, base_price * 0.02)  # 2% variation
+        forecast_price += variation
+        
+        # Ensure minimum price
+        forecast_price = max(forecast_price, base_price * 0.7, 50)
+        forecasts.append(forecast_price)
+    
+    # Combine historical and forecast data
+    all_dates = list(df['date']) + list(future_dates)
+    all_forecasts = [None] * len(df) + forecasts
+    
+    return pd.DataFrame({
+        'date': all_dates,
+        f'forecast_{grade}': all_forecasts
+    })
 
-# --- Clustering ---
-def cluster_markets(market_data):
-    """Cluster markets based on economic indicators."""
-    features = market_data[['gdp', 'population', 'tea_consumption', 'import_duty', 'distance_km', 'political_risk', 'currency_volatility']]
-    scaler = StandardScaler()
-    scaled_features = scaler.fit_transform(features)
+def add_confidence_intervals(df, forecasts):
+    """
+    Add confidence intervals to provide uncertainty estimates.
+    """
+    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
+    
+    for grade in grades:
+        if f'forecast_{grade}' in forecasts.columns:
+            forecast_col = f'forecast_{grade}'
+            # Calculate confidence intervals based on historical volatility
+            historical_prices = df[grade].dropna()
+            
+            if len(historical_prices) > 1:
+                volatility = historical_prices.std()
+                
+                # Add confidence intervals
+                forecasts[f'{forecast_col}_lower'] = forecasts[forecast_col] - (1.96 * volatility * 0.5)
+                forecasts[f'{forecast_col}_upper'] = forecasts[forecast_col] + (1.96 * volatility * 0.5)
+                
+                # Ensure lower bound is never negative
+                forecasts[f'{forecast_col}_lower'] = forecasts[f'{forecast_col}_lower'].clip(lower=50)
+    
+    return forecasts
 
-    kmeans = KMeans(n_clusters=3, random_state=42)
-    market_data['cluster'] = kmeans.fit_predict(scaled_features)
-    return market_data
-
-
-# --- Price Calculation ---
-def calculate_optimal_price(production_cost, competitor_price, demand_factor):
-    """Calculate optimal selling price."""
-    margin = 0.25
-    demand_multiplier = 1 + (demand_factor - 0.5)
-    competition_factor = np.clip(competitor_price / production_cost, 0.8, 1.2)
-    return production_cost * (1 + margin) * demand_multiplier * competition_factor
-
-
-# --- Country Forecasts ---
-def generate_country_forecasts(base_forecast, countries):
-    """Generate adjusted forecasts per country."""
-    country_forecasts = {}
-    for country in countries:
-        offset = np.random.uniform(-10, 10)
-        multiplier = np.random.uniform(0.9, 1.1)
-        forecast = base_forecast.copy()
-        forecast['forecast_price'] = (forecast['forecast_price'] + offset) * multiplier
-        country_forecasts[country] = forecast
-    return country_forecasts
-
-
-# --- Pricing Strategies ---
-def simulate_pricing_strategies(production_cost, demand_curve_params, strategies):
-    """Simulate profitability under different pricing markups."""
-    a, b = demand_curve_params
-    results = {}
-    for markup in strategies:
-        price = production_cost * (1 + markup)
-        demand = max(a - b * price, 0)
-        profit = (price - production_cost) * demand
-        results[markup] = profit
-    return results
-
-
-# --- Buyer Behavior Prediction ---
-def predict_buyer_behavior(market_data):
-    """Predict tea consumption based on GDP."""
-    X = market_data[['gdp']]
-    y = market_data['tea_consumption']
-    model = LinearRegression()
-    model.fit(X, y)
-    market_data['predicted_tea_consumption'] = model.predict(X)
-    return market_data
-
-
-# --- Policy Simulation ---
-def simulate_policy_impact(export_data, reserve_price_increase=5, payment_speed_bonus=0.02):
-    """Simulate policy impact on export prices."""
-    adjusted = export_data.copy()
-    adjusted['export_price'] += reserve_price_increase
-    adjusted['export_price'] *= (1 + payment_speed_bonus)
-    return adjusted
-
-
-# --- Price Forecast Generation ---
-def generate_price_forecast():
-    """Generate price forecasts for 12 months."""
-    base_date = datetime.today()
-    dates = [base_date + timedelta(weeks=4 * i) for i in range(12)]
-    prices = [round(2.5 + 0.05 * i + random.uniform(-0.1, 0.1), 2) for i in range(12)]
-    return [d.strftime('%Y-%m') for d in dates], prices
-
-
-# --- Country Datasets ---
-def generate_country_datasets():
-    """Generate export price datasets for multiple countries."""
-    countries = ['UK', 'Pakistan', 'Egypt']
-    labels, _ = generate_price_forecast()
-    datasets = []
-    for country in countries:
-        data = [round(2.4 + 0.03 * i + random.uniform(-0.05, 0.05), 2) for i in range(12)]
-        datasets.append({'label': country, 'data': data, 'borderWidth': 2})
-    return datasets
-
-
-# --- Dynamic Pricing Simulation ---
-def simulate_dynamic_pricing():
-    """Simulate profit for different dynamic pricing models."""
-    models = ['Cost Plus', 'AI Optimized', 'Competitor Based']
-    profits = [random.randint(50000, 90000), random.randint(80000, 120000), random.randint(60000, 95000)]
-    return models, profits
-
-
-# --- Policy Chart Data ---
-def simulate_policy_chart_data():
-    """Simulate policy impact chart values."""
-    policies = ['Export Tax Relief', 'Auction Reform']
-    values = [random.uniform(1, 5), random.uniform(2, 6)]
-    return policies, [round(v, 2) for v in values]
-
-
-# --- Market Opportunities Simulation ---
-def simulate_market_opportunities():
-    """Simulate market opportunities for different countries."""
-    countries = ['India', 'Germany', 'China']
-    return [{
-        'country': c,
-        'gdp': round(random.uniform(1000, 3000), 2),
-        'population': round(random.uniform(50, 1500), 1),
-        'tea_consumption': round(random.uniform(0.2, 1.5), 2),
-        'import_duty': random.randint(5, 30),
-        'market_potential': random.choice(['High', 'Medium', 'Low'])
-    } for c in countries]
-
-
-# --- Recommendation Engine ---
-def recommend_sale_timing(forecast_prices):
-    """Recommend best month to sell based on forecast prices."""
-    max_price = max(forecast_prices)
-    best_month = forecast_prices.index(max_price)
-    best_month_name = (datetime.today() + timedelta(weeks=4 * best_month)).strftime('%B')
-    return f"Month {best_month + 1} ({best_month_name})"
-
-
-# --- Benchmarking ---
-def benchmark_against_traditional(forecast_prices):
-    """Compare AI prices against traditional pricing."""
-    traditional_prices = [p - random.uniform(0.05, 0.2) for p in forecast_prices]
-    accuracy = [round(100 - abs(f - t) / t * 100, 2) for f, t in zip(forecast_prices, traditional_prices)]
-    return traditional_prices, accuracy
-
-
-# --- Risk Assessment ---
-def simulate_risk_assessment(n=12):
-    """Simulate risk levels."""
-    return [round(random.uniform(0, 1), 2) for _ in range(n)]
-
-
-# --- Competitor Modeling ---
-def model_competitor_behavior():
-    """Model competitor behavior and average price."""
-    competitors = simulate_competitor_behavior()
-    average_price = np.mean([c['price'] for c in competitors])
-    return competitors, round(average_price, 2)
-
-
-# --- Scenario Planning ---
-def generate_scenario_comparison():
-    """Generate values for different future scenarios."""
-    scenarios = ['Optimistic', 'Baseline', 'Pessimistic']
-    values = [round(random.uniform(3.0, 4.0), 2), round(random.uniform(2.5, 3.5), 2), round(random.uniform(2.0, 3.0), 2)]
-    return scenarios, values
+# --- Main forecasting function with all improvements ---
+def forecast_prices(df, periods=12):
+    """
+    Main forecasting function that combines all robust forecasting techniques.
+    """
+    # Use the robust forecasting method
+    forecasts = forecast_prices_robust(df, periods)
+    
+    # Add confidence intervals
+    forecasts = add_confidence_intervals(df, forecasts)
+    
+    return forecasts

@@ -4,160 +4,127 @@
 
 {% block content %}
 <div class="d-flex justify-content-between align-items-center mb-4">
-    <h2 class="mb-0">Market Overview</h2>
+    <h2 class="mb-0">Tea Grade Forecasts</h2>
     <div>
         <span class="badge badge-tea me-2">
-            <i class="fas fa-calendar-alt me-1"></i> Last 12 Months
+            <i class="fas fa-calendar-alt me-1"></i> Historical & Forecast
         </span>
-        <div class="btn-group">
-            <button class="btn btn-sm btn-outline-secondary">Daily</button>
-            <button class="btn btn-sm btn-outline-secondary active">Weekly</button>
-            <button class="btn btn-sm btn-outline-secondary">Monthly</button>
-        </div>
+        <span class="badge bg-info text-dark">
+            <i class="fas fa-database me-1"></i>{{ total_data_points }} Data Points
+        </span>
     </div>
 </div>
 
+<!-- Summary Statistics Cards -->
+<div class="row mb-4">
+    {% for stat in summary_stats %}
+    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
+        <div class="card border-0 shadow-sm">
+            <div class="card-body text-center p-3">
+                <h6 class="card-title text-muted mb-1">{{ stat.grade }}</h6>
+                <h4 class="mb-1 text-primary">${{ stat.current_price }}</h4>
+                <small class="text-muted">Current</small>
+                <hr class="my-2">
+                <div class="d-flex justify-content-between align-items-center">
+                    <small class="text-muted">Next:</small>
+                    <strong class="text-success">${{ stat.next_forecast }}</strong>
+                </div>
+                <div class="mt-1">
+                    {% if stat.trend >= 0 %}
+                        <small class="text-success">
+                            <i class="fas fa-arrow-up"></i> +{{ stat.trend }}%
+                        </small>
+                    {% else %}
+                        <small class="text-danger">
+                            <i class="fas fa-arrow-down"></i> {{ stat.trend }}%
+                        </small>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endfor %}
+</div>
+
+<!-- Price Forecast Charts -->
 <div class="row">
-    <div class="col-lg-6">
-        <div class="card highlight-card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="fas fa-chart-line me-2"></i>Kenyan Tea Price Forecast</span>
-                <button class="btn btn-sm btn-outline-primary">View Details</button>
-            </div>
-            <div class="card-body">
-                <div class="chart-container">
-                    <canvas id="priceChart" aria-label="Kenya Export Price Forecast"></canvas>
-                </div>
-                <div class="mt-3 text-muted small">
-                    <i class="fas fa-info-circle me-1"></i> Forecast based on historical data and market trends
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-lg-6">
-        <div class="card highlight-card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <span><i class="fas fa-globe-africa me-2"></i>Forecasted Prices by Country</span>
-                <div class="dropdown">
-                    <button class="btn btn-sm btn-outline-primary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                        Options
-                    </button>
-                    <ul class="dropdown-menu">
-                        <li><a class="dropdown-item" href="#">Export Data</a></li>
-                        <li><a class="dropdown-item" href="#">Compare Years</a></li>
-                    </ul>
+    {% for grade in grades %}
+    <div class="col-lg-6 mb-4">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white border-bottom">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-chart-line me-2 text-primary"></i>{{ grade }} Price Forecast
+                    </h5>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary" onclick="toggleConfidenceInterval('{{ grade|slugify }}')">
+                            <i class="fas fa-eye"></i> Confidence
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" onclick="downloadChart('{{ grade|slugify }}')">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
                 </div>
             </div>
             <div class="card-body">
-                <div class="chart-container">
-                    <canvas id="countryChart" aria-label="Country-wise Forecast"></canvas>
+                <div style="height: 350px;">
+                    <canvas id="chart-{{ grade|slugify }}"></canvas>
                 </div>
-                <div class="mt-3 text-muted small">
-                    <i class="fas fa-info-circle me-1"></i> Top 5 export destinations shown
-                </div>
+                
+                <!-- Grade Statistics -->
+                {% for stat in summary_stats %}
+                    {% if stat.grade == grade %}
+                    <div class="row mt-3 pt-3 border-top">
+                        <div class="col-4 text-center">
+                            <small class="text-muted d-block">Min</small>
+                            <strong>${{ stat.min_historical }}</strong>
+                        </div>
+                        <div class="col-4 text-center">
+                            <small class="text-muted d-block">Avg</small>
+                            <strong>${{ stat.avg_historical }}</strong>
+                        </div>
+                        <div class="col-4 text-center">
+                            <small class="text-muted d-block">Max</small>
+                            <strong>${{ stat.max_historical }}</strong>
+                        </div>
+                    </div>
+                    {% endif %}
+                {% endfor %}
             </div>
         </div>
     </div>
+    {% endfor %}
 </div>
 
+<!-- Forecast Information Panel -->
 <div class="row mt-4">
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">
-                <i class="fas fa-trophy me-2"></i>Best Market
-            </div>
-            <div class="card-body text-center py-4">
-                <h3 class="text-success">{{ best_market }}</h3>
-                <p class="mb-0 text-muted">Highest average price</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">
-                <i class="fas fa-chart-bar me-2"></i>Highest Growth
-            </div>
-            <div class="card-body text-center py-4">
-                <h3 class="text-primary">{{ highest_growth_market }}</h3>
-                <p class="mb-0 text-muted">Year-over-year growth</p>
-            </div>
-        </div>
-    </div>
-    <div class="col-md-4">
-        <div class="card">
-            <div class="card-header">
-                <i class="fas fa-tag me-2"></i>Optimal Price
-            </div>
-            <div class="card-body text-center py-4">
-                <h3>${{ optimal_price }}</h3>
-                <p class="mb-0 text-muted">Recommended target price</p>
-            </div>
-        </div>
-    </div>
-</div>
-
-<div class="card mt-4">
-    <div class="card-header">
-        <i class="fas fa-table me-2"></i>Market Potential Summary
-    </div>
-    <div class="card-body">
-        <div class="table-responsive">
-            <table class="table table-hover">
-                <thead>
-                    <tr>
-                        <th scope="col">Country</th>
-                        <th scope="col">GDP (Billion USD)</th>
-                        <th scope="col">Population (M)</th>
-                        <th scope="col">Tea Consumption</th>
-                        <th scope="col">Import Duty</th>
-                        <th scope="col">Market Potential</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for market in markets %}
-                    <tr>
-                        <td><strong>{{ market.country }}</strong></td>
-                        <td>{{ market.gdp }}</td>
-                        <td>{{ market.population }}</td>
-                        <td>{{ market.tea_consumption }} kg/capita</td>
-                        <td>{{ market.import_duty }}%</td>
-                        <td>
-                            <span class="badge 
-                                {% if market.market_potential == 'High' %}bg-success
-                                {% elif market.market_potential == 'Medium' %}bg-warning text-dark
-                                {% else %}bg-secondary{% endif %}">
-                                {{ market.market_potential }}
-                            </span>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-</div>
-
-<div class="row mt-4">
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <i class="fas fa-money-bill-wave me-2"></i>Dynamic Pricing Model Comparison
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-light">
+                <h5 class="mb-0">
+                    <i class="fas fa-info-circle me-2"></i>Forecast Information
+                </h5>
             </div>
             <div class="card-body">
-                <div class="chart-container" style="height: 300px;">
-                    <canvas id="pricingModelChart"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-    <div class="col-lg-6">
-        <div class="card">
-            <div class="card-header">
-                <i class="fas fa-balance-scale me-2"></i>Policy Simulation Impact
-            </div>
-            <div class="card-body">
-                <div class="chart-container" style="height: 300px;">
-                    <canvas id="policySimulationChart"></canvas>
+                <div class="row">
+                    <div class="col-md-6">
+                        <h6 class="text-primary">Model Features</h6>
+                        <ul class="list-unstyled">
+                            <li><i class="fas fa-check text-success me-2"></i>Robust trend analysis</li>
+                            <li><i class="fas fa-check text-success me-2"></i>Non-negative price guarantee</li>
+                            <li><i class="fas fa-check text-success me-2"></i>Confidence intervals</li>
+                            <li><i class="fas fa-check text-success me-2"></i>Volatility dampening</li>
+                        </ul>
+                    </div>
+                    <div class="col-md-6">
+                        <h6 class="text-primary">Forecast Details</h6>
+                        <ul class="list-unstyled">
+                            <li><i class="fas fa-calendar me-2"></i>{{ forecast_months }} months ahead</li>
+                            <li><i class="fas fa-shield-alt me-2"></i>Minimum price floor: $50</li>
+                            <li><i class="fas fa-chart-line me-2"></i>Trend-dampened projections</li>
+                            <li><i class="fas fa-database me-2"></i>{{ total_data_points }} historical points</li>
+                        </ul>
+                    </div>
                 </div>
             </div>
         </div>
@@ -167,199 +134,309 @@
 {% endblock %}
 
 {% block extra_js %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-    // Custom Chart.js defaults for cleaner look
+    // Chart.js global defaults
     Chart.defaults.color = '#6c757d';
     Chart.defaults.borderColor = 'rgba(0, 0, 0, 0.05)';
     Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
-    Chart.defaults.plugins.legend.position = 'bottom';
-    Chart.defaults.plugins.legend.labels.boxWidth = 12;
-    Chart.defaults.plugins.legend.labels.padding = 20;
+    Chart.defaults.plugins.legend.position = 'top';
+
+    // Color palette
+    const colors = {
+        primary: '#2c8a5a',
+        forecast: '#3a86ff',
+        confidence: 'rgba(58, 134, 255, 0.1)',
+        success: '#28a745',
+        warning: '#ffc107',
+        danger: '#dc3545'
+    };
+
+    const exportDates = JSON.parse('{{ export_dates|escapejs }}');
+    const gradeDatasets = JSON.parse('{{ grade_datasets|escapejs }}');
     
-    const primaryColor = '#2c8a5a';
-    const accentColor = '#e9c46a';
-    const colors = [
-        primaryColor,
-        '#3a86ff',
-        '#8338ec',
-        '#ff006e',
-        '#fb5607',
-        accentColor
-    ];
-    
-    // Price Chart
-    const priceCtx = document.getElementById('priceChart').getContext('2d');
-    const priceChart = new Chart(priceCtx, {
-        type: 'line',
-        data: {
-            labels: JSON.parse('{{ export_dates|escapejs }}'),
-            datasets: JSON.parse('{{ grade_datasets|escapejs }}').map((dataset, i) => ({
-                ...dataset,
-                borderWidth: 2,
-                borderColor: colors[i % colors.length],
-                backgroundColor: 'transparent',
-                pointRadius: 0,
-                pointHoverRadius: 5,
-                tension: 0.3,
-                fill: false
-            }))
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
+    // Store chart instances for later manipulation
+    const chartInstances = {};
+
+    {% for grade in grades %}
+    {
+        // Find datasets for this grade
+        const gradeActual = gradeDatasets.find(d => d.label === '{{ grade }} Actual');
+        const gradeForecast = gradeDatasets.find(d => d.label === '{{ grade }} Forecast');
+        const gradeConfidenceUpper = gradeDatasets.find(d => d.label === '{{ grade }} Confidence Range');
+        const gradeConfidenceLower = gradeDatasets.find(d => d.label === '{{ grade }} Lower Bound');
+
+        if (gradeActual && gradeForecast) {
+            const ctx = document.getElementById('chart-{{ grade|slugify }}').getContext('2d');
+            
+            // Prepare datasets array
+            const datasets = [
+                {
+                    label: 'Actual {{ grade }}',
+                    data: gradeActual.data,
+                    borderColor: colors.primary,
+                    backgroundColor: colors.primary + '20',
+                    borderWidth: 3,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    pointBackgroundColor: colors.primary,
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    fill: false,
+                    tension: 0.1,
+                    spanGaps: true
                 },
-                zoom: {
-                    zoom: {
-                        wheel: { enabled: true },
-                        pinch: { enabled: true },
-                        mode: 'xy',
+                {
+                    label: 'Forecast {{ grade }}',
+                    data: gradeForecast.data,
+                    borderColor: colors.forecast,
+                    backgroundColor: colors.forecast + '20',
+                    borderDash: [8, 4],
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    pointBackgroundColor: colors.forecast,
+                    pointBorderColor: '#fff',
+                    pointBorderWidth: 2,
+                    fill: false,
+                    tension: 0.2,
+                    spanGaps: true
+                }
+            ];
+
+            // Add confidence intervals if available
+            if (gradeConfidenceUpper && gradeConfidenceLower) {
+                datasets.push({
+                    label: 'Confidence Range',
+                    data: gradeConfidenceUpper.data,
+                    borderColor: 'transparent',
+                    backgroundColor: colors.confidence,
+                    pointRadius: 0,
+                    fill: '+1',
+                    tension: 0.2,
+                    spanGaps: true
+                });
+                
+                datasets.push({
+                    label: 'Confidence Lower',
+                    data: gradeConfidenceLower.data,
+                    borderColor: 'transparent',
+                    backgroundColor: colors.confidence,
+                    pointRadius: 0,
+                    fill: false,
+                    tension: 0.2,
+                    spanGaps: true
+                });
+            }
+
+            const chartConfig = {
+                type: 'line',
+                data: {
+                    labels: exportDates,
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    spanGaps: true,
+                    plugins: {
+                        legend: { 
+                            position: 'top',
+                            labels: {
+                                filter: function(legendItem, chartData) {
+                                    // Hide confidence bound labels from legend
+                                    return !legendItem.text.includes('Confidence') && !legendItem.text.includes('Lower');
+                                }
+                            }
+                        },
+                        title: { display: false },
+                        tooltip: {
+                            mode: 'index',
+                            intersect: false,
+                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
+                            titleColor: '#fff',
+                            bodyColor: '#fff',
+                            borderColor: '#ddd',
+                            borderWidth: 1,
+                            callbacks: {
+                                label: function(context) {
+                                    if (context.raw !== null && context.raw !== undefined) {
+                                        const value = typeof context.raw === 'number' ? context.raw : context.raw.y || context.raw;
+                                        return context.dataset.label + ': $' + value.toFixed(2);
+                                    }
+                                    return null;
+                                },
+                                afterBody: function(tooltipItems) {
+                                    const dataPoint = tooltipItems[0];
+                                    if (dataPoint && dataPoint.dataIndex < exportDates.length) {
+                                        const date = new Date(exportDates[dataPoint.dataIndex]);
+                                        const now = new Date();
+                                        const isForecast = date > now;
+                                        
+                                        if (isForecast) {
+                                            return ['', '⚠️ Forecast data - actual results may vary'];
+                                        }
+                                    }
+                                    return '';
+                                }
+                            }
+                        }
                     },
-                    pan: {
-                        enabled: true,
-                        mode: 'xy',
+                    interaction: {
+                        mode: 'nearest',
+                        axis: 'x',
+                        intersect: false
+                    },
+                    scales: {
+                        x: { 
+                            grid: { 
+                                display: true,
+                                color: 'rgba(0, 0, 0, 0.03)'
+                            },
+                            title: { 
+                                display: true, 
+                                text: 'Timeline',
+                                font: { weight: 'bold' }
+                            },
+                            ticks: {
+                                callback: function(value, index) {
+                                    const date = new Date(this.getLabelForValue(value));
+                                    return date.toLocaleDateString('en-US', { 
+                                        month: 'short', 
+                                        year: '2-digit' 
+                                    });
+                                }
+                            }
+                        },
+                        y: { 
+                            title: { 
+                                display: true, 
+                                text: 'Price (USD)',
+                                font: { weight: 'bold' }
+                            },
+                            grid: { 
+                                color: 'rgba(0, 0, 0, 0.03)' 
+                            },
+                            ticks: {
+                                callback: function(value) {
+                                    return '$' + value.toFixed(0);
+                                }
+                            },
+                            min: 0 // Ensure y-axis starts at 0
+                        }
+                    },
+                    animation: {
+                        duration: 1000,
+                        easing: 'easeInOutQuart'
                     }
                 }
-            },
-            interaction: {
-                mode: 'nearest',
-                axis: 'x',
-                intersect: false
-            },
-            scales: {
-                x: { 
-                    grid: { display: false },
-                    title: { display: true, text: 'Timeline', color: '#6c757d' }
-                },
-                y: { 
-                    title: { display: true, text: 'Price (USD/kg)', color: '#6c757d' },
-                    grid: { color: 'rgba(0, 0, 0, 0.03)' }
-                }
-            }
-        }
-    });
+            };
 
-    // Country Chart
-    const countryCtx = document.getElementById('countryChart').getContext('2d');
-    const countryChart = new Chart(countryCtx, {
-        type: 'line',
-        data: {
-            labels: JSON.parse('{{ export_dates|escapejs }}'),
-            datasets: JSON.parse('{{ country_datasets|escapejs }}').map((dataset, i) => ({
-                ...dataset,
-                borderWidth: 2,
-                borderColor: colors[i % colors.length],
-                backgroundColor: 'transparent',
-                pointRadius: 0,
-                pointHoverRadius: 5,
-                tension: 0.3,
-                fill: false
-            }))
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                }
-            },
-            interaction: {
-                mode: 'nearest',
-                axis: 'x',
-                intersect: false
-            },
-            scales: {
-                x: { 
-                    grid: { display: false },
-                    title: { display: true, text: 'Timeline', color: '#6c757d' }
-                },
-                y: { 
-                    title: { display: true, text: 'Price (USD/kg)', color: '#6c757d' },
-                    grid: { color: 'rgba(0, 0, 0, 0.03)' }
-                }
-            }
+            chartInstances['{{ grade|slugify }}'] = new Chart(ctx, chartConfig);
         }
-    });
+    }
+    {% endfor %}
 
-    // Pricing Model Chart
-    const pricingModelCtx = document.getElementById('pricingModelChart').getContext('2d');
-    const pricingModelChart = new Chart(pricingModelCtx, {
-        type: 'bar',
-        data: {
-            labels: JSON.parse('{{ dynamic_pricing_labels|escapejs }}'),
-            datasets: [{
-                label: 'Total Profit (USD)',
-                data: JSON.parse('{{ dynamic_pricing_values|escapejs }}'),
-                backgroundColor: [primaryColor, '#3a86ff', accentColor],
-                borderColor: ['#fff'],
-                borderWidth: 0,
-                borderRadius: 4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return '$' + context.raw.toLocaleString();
+    // Utility functions
+    function toggleConfidenceInterval(gradeSlug) {
+        const chart = chartInstances[gradeSlug];
+        if (chart) {
+            const confidenceDatasets = chart.data.datasets.filter(d => 
+                d.label.includes('Confidence') || d.label.includes('Lower')
+            );
+            
+            confidenceDatasets.forEach(dataset => {
+                dataset.hidden = !dataset.hidden;
+            });
+            
+            chart.update();
+        }
+    }
+
+    function downloadChart(gradeSlug) {
+        const chart = chartInstances[gradeSlug];
+        if (chart) {
+            const link = document.createElement('a');
+            link.download = `${gradeSlug}_forecast_chart.png`;
+            link.href = chart.toBase64Image();
+            link.click();
+        }
+    }
+
+    // Add visual separator for forecast vs actual data
+    function addForecastSeparator() {
+        const now = new Date();
+        const currentDateIndex = exportDates.findIndex(dateStr => {
+            const date = new Date(dateStr);
+            return date > now;
+        });
+
+        if (currentDateIndex > 0) {
+            Object.values(chartInstances).forEach(chart => {
+                // Add a plugin to draw a vertical line separating historical and forecast data
+                chart.options.plugins.annotation = {
+                    annotations: {
+                        line1: {
+                            type: 'line',
+                            xMin: currentDateIndex - 0.5,
+                            xMax: currentDateIndex - 0.5,
+                            borderColor: 'rgba(255, 99, 132, 0.5)',
+                            borderWidth: 2,
+                            borderDash: [5, 5],
+                            label: {
+                                enabled: true,
+                                content: 'Forecast',
+                                position: 'start'
+                            }
                         }
                     }
-                }
-            },
-            scales: {
-                x: { grid: { display: false } },
-                y: { 
-                    grid: { color: 'rgba(0, 0, 0, 0.03)' },
-                    title: { display: true, text: 'Profit (USD)', color: '#6c757d' }
-                }
-            }
+                };
+                chart.update();
+            });
         }
-    });
+    }
 
-    // Policy Simulation Chart
-    const policySimulationCtx = document.getElementById('policySimulationChart').getContext('2d');
-    const policySimulationChart = new Chart(policySimulationCtx, {
-        type: 'bar',
-        data: {
-            labels: JSON.parse('{{ policy_labels|escapejs }}'),
-            datasets: [{
-                label: 'Avg Price Growth (%)',
-                data: JSON.parse('{{ policy_values|escapejs }}'),
-                backgroundColor: [primaryColor, accentColor],
-                borderColor: ['#fff'],
-                borderWidth: 0,
-                borderRadius: 4
-            }]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: { display: false },
-                tooltip: {
-                    callbacks: {
-                        label: function(context) {
-                            return context.raw + '%';
-                        }
-                    }
-                }
-            },
-            scales: {
-                x: { grid: { display: false } },
-                y: { 
-                    grid: { color: 'rgba(0, 0, 0, 0.03)' },
-                    title: { display: true, text: 'Growth (%)', color: '#6c757d' }
-                }
-            }
-        }
+    // Initialize page
+    document.addEventListener('DOMContentLoaded', function() {
+        // Add any additional initialization here
+        console.log('Tea Grade Forecast Dashboard Loaded');
+        console.log(`Displaying ${Object.keys(chartInstances).length} forecast charts`);
     });
 </script>
+
+<!-- Add custom CSS for better styling -->
+<style>
+    .badge-tea {
+        background-color: #2c8a5a;
+        color: white;
+    }
+    
+    .card {
+        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    }
+    
+    .card:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1) !important;
+    }
+    
+    .btn-group-sm .btn {
+        font-size: 0.75rem;
+        padding: 0.25rem 0.5rem;
+    }
+    
+    canvas {
+        background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
+        border-radius: 8px;
+    }
+    
+    .text-primary {
+        color: #2c8a5a !important;
+    }
+    
+    .border-top {
+        border-color: #e9ecef !important;
+    }
+</style>
+
 {% endblock %}
