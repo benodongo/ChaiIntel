@@ -121,11 +121,11 @@ def dashboard(request):
             })
 
     # Create combined dataset (actual prices only) - THIS WAS MISINDENTED BEFORE
-    combined_actuals = []
+    combined_data  = []
     for idx, grade in enumerate(grades):
-        # Actual prices - keep None for missing values
+        # Actual prices
         actual_prices = [val if not pd.isna(val) else None for val in merged[grade]]
-        combined_actuals.append({
+        combined_data.append({
             'label': f'{grade} Actual',
             'data': actual_prices,
             'borderColor': colors[idx],
@@ -136,11 +136,27 @@ def dashboard(request):
             'fill': False,
             'tension': 0.1
         })
+         # Forecast values
+        forecast_col = f'forecast_{grade}'
+        if forecast_col in merged.columns:
+            forecast_values = [max(val, 50) if not pd.isna(val) else None for val in merged[forecast_col]]
+            combined_data.append({
+                'label': f'{grade} Forecast',
+                'data': forecast_values,
+                'borderColor': colors[idx],
+                'backgroundColor': colors[idx] + '10',
+                'borderDash': [8, 4],  # Dashed line for forecast
+                'borderWidth': 2,
+                'pointRadius': 3,
+                'pointHoverRadius': 5,
+                'fill': False,
+                'tension': 0.2
+            })
     
     context = {
         'export_dates': json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
         'grade_datasets': json.dumps(grade_datasets),
-        'combined_datasets': json.dumps(combined_actuals),  # Now properly included
+        'combined_datasets': json.dumps(combined_data),  # Now properly included
         'grades': grades,
         'summary_stats': summary_stats,
         'total_data_points': len(export_data),
