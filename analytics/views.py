@@ -119,10 +119,28 @@ def dashboard(request):
                 'max_historical': round(actual_data.max(), 2),
                 'avg_historical': round(actual_data.mean(), 2)
             })
+
+    # Create combined dataset (actual prices only) - THIS WAS MISINDENTED BEFORE
+    combined_actuals = []
+    for idx, grade in enumerate(grades):
+        # Actual prices - keep None for missing values
+        actual_prices = [val if not pd.isna(val) else None for val in merged[grade]]
+        combined_actuals.append({
+            'label': f'{grade} Actual',
+            'data': actual_prices,
+            'borderColor': colors[idx],
+            'backgroundColor': colors[idx] + '20',
+            'borderWidth': 2,
+            'pointRadius': 3,
+            'pointHoverRadius': 5,
+            'fill': False,
+            'tension': 0.1
+        })
     
     context = {
         'export_dates': json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
         'grade_datasets': json.dumps(grade_datasets),
+        'combined_datasets': json.dumps(combined_actuals),  # Now properly included
         'grades': grades,
         'summary_stats': summary_stats,
         'total_data_points': len(export_data),

@@ -1,19 +1,84 @@
-Setting up.
-Navigate to your project directory
-Open your terminal or command prompt, then:
-cd path/to/your/project
-Create the virtual environment
+# ChaiIntel - Project Setup Guide
+
+This guide walks you through setting up the ChaiIntel Django project on your local machine.
+
+---
+
+## ✅ Step 1: Install Python
+
+1. Download Python 3.9 or newer from [python.org](https://www.python.org/downloads/).
+2. During installation, check the box:
+
+   * ✅ *Add Python to PATH*
+
+---
+
+## ✅ Step 2: Install Git
+
+1. Download Git from [git-scm.com](https://git-scm.com/downloads).
+2. Install it with default settings.
+3. Verify installation:
+
+   ```bash
+   git --version
+   ```
+
+---
+
+## ✅ Step 3: Clone the Repository
+
+```bash
+git clone https://github.com/benodongo/ChaiIntel.git
+cd ChaiIntel
+```
+
+---
+
+## ✅ Step 4: Create Virtual Environment
+
+### 🔹 On Windows
+
+```bash
 python -m venv venv
+venv\Scripts\activate
+```
 
- Activate the virtual environment
- venv\Scripts\activate
+### 🔹 On macOS/Linux
 
- Install packages from requirements.txt
- pip install -r requirements.txt
+```bash
+python3 -m venv venv
+source venv/bin/activate
+```
 
- Apply migrations
- python manage.py makemigrations
- python manage.py migrate
+---
 
- Run the development server
- python manage.py runserver
+## ✅ Step 5: Install Dependencies
+
+```bash
+pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+---
+
+
+
+## ✅ Step 6: Apply Migrations
+
+```bash
+python manage.py migrate
+```
+
+---
+
+## ✅ Step 7: Run Development Server
+
+```bash
+python manage.py runserver
+```
+
+Visit: [http://127.0.0.1:8000](http://127.0.0.1:8000)
+
+---
+
+
