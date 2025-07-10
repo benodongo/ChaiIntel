@@ -29,7 +29,7 @@
                     <small class="text-muted">Next:</small>
                     <strong class="text-success">${{ stat.next_forecast }}</strong>
                 </div>
-                <div class="mt-1">
+                <!-- <div class="mt-1">
                     {% if stat.trend >= 0 %}
                         <small class="text-success">
                             <i class="fas fa-arrow-up"></i> +{{ stat.trend }}%
@@ -39,7 +39,7 @@
                             <i class="fas fa-arrow-down"></i> {{ stat.trend }}%
                         </small>
                     {% endif %}
-                </div>
+                </div> -->
             </div>
         </div>
     </div>
@@ -120,7 +120,7 @@
 </div>
 
 <!-- Forecast Information Panel -->
-<div class="row mt-4">
+<!-- <div class="row mt-4">
     <div class="col-12">
         <div class="card border-0 shadow-sm">
             <div class="card-header bg-light">
@@ -148,6 +148,30 @@
                             <li><i class="fas fa-database me-2"></i>{{ total_data_points }} historical points</li>
                         </ul>
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div> -->
+<!-- Package Trends Over Time -->
+<div class="row mt-4">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white border-bottom">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-chart-line me-2 text-primary"></i>Pkgs sold per grade Trends 
+                    </h5>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary" onclick="downloadChart('package-trends')">
+                            <i class="fas fa-download"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="card-body">
+                <div style="height: 400px;">
+                    <canvas id="chart-package-trends"></canvas>
                 </div>
             </div>
         </div>
@@ -182,14 +206,81 @@
     // Store chart instances for later manipulation
     const chartInstances = {};
 
-    // 1. First render the combined chart
+    // 1. Combined Chart with Forecast and Confidence Intervals
     if (combinedDatasets.length > 0) {
         const ctx = document.getElementById('chart-combined').getContext('2d');
+        
+        // Process datasets to add forecast styling and confidence intervals
+        const processedDatasets = [];
+        const grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2'];
+        const gradeColors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF'];
+        
+        grades.forEach((grade, idx) => {
+            // Find actual and forecast datasets
+            const actual = combinedDatasets.find(d => d.label === `${grade} Actual`);
+            const forecast = combinedDatasets.find(d => d.label === `${grade} Forecast`);
+            
+            if (actual) {
+                processedDatasets.push({
+                    ...actual,
+                    borderColor: gradeColors[idx],
+                    backgroundColor: gradeColors[idx] + '20',
+                    borderWidth: 3,
+                    pointRadius: 5,
+                    pointHoverRadius: 7,
+                    fill: false,
+                    tension: 0.1
+                });
+            }
+            
+            if (forecast) {
+                processedDatasets.push({
+                    ...forecast,
+                    borderColor: gradeColors[idx],
+                    backgroundColor: gradeColors[idx] + '10',
+                    borderDash: [8, 4],  // Dotted line for forecast
+                    borderWidth: 2,
+                    pointRadius: 3,
+                    pointHoverRadius: 5,
+                    fill: false,
+                    tension: 0.2
+                });
+                
+                // Add confidence intervals if available
+                const lower = gradeDatasets.find(d => d.label === `${grade} Lower Bound`);
+                const upper = gradeDatasets.find(d => d.label === `${grade} Confidence Range`);
+                
+                if (lower && upper) {
+                    processedDatasets.push({
+                        label: `${grade} Confidence Range`,
+                        data: upper.data,
+                        borderColor: gradeColors[idx] + '40',
+                        backgroundColor: gradeColors[idx] + '15',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        fill: '+1',  // Fill to next dataset (lower bound)
+                        tension: 0.2
+                    });
+                    
+                    processedDatasets.push({
+                        label: `${grade} Lower Bound`,
+                        data: lower.data,
+                        borderColor: gradeColors[idx] + '40',
+                        backgroundColor: gradeColors[idx] + '15',
+                        borderWidth: 1,
+                        pointRadius: 0,
+                        fill: false,
+                        tension: 0.2
+                    });
+                }
+            }
+        });
+        
         chartInstances['combined'] = new Chart(ctx, {
             type: 'line',
             data: {
                 labels: exportDates,
-                datasets: combinedDatasets
+                datasets: processedDatasets
             },
             options: {
                 responsive: true,
@@ -201,8 +292,11 @@
                             usePointStyle: true,
                             pointStyle: 'circle',
                             padding: 20,
-                            font: {
-                                size: 12
+                            font: { size: 12 },
+                            filter: function(item, chart) {
+                                // Hide confidence intervals from legend
+                                return !item.text.includes('Confidence') && 
+                                       !item.text.includes('Lower Bound');
                             }
                         }
                     },
@@ -216,11 +310,19 @@
                         borderWidth: 1,
                         callbacks: {
                             label: function(context) {
-                                const label = context.dataset.label.replace(' Actual', '');
+                                const label = context.dataset.label.replace(' Actual', '')
+                                                                   .replace(' Forecast', '')
+                                                                   .replace(' Confidence Range', '');
                                 if (context.parsed.y !== null) {
                                     return `${label}: $${context.parsed.y.toFixed(2)}`;
                                 }
                                 return null;
+                            },
+                            afterLabel: function(context) {
+                                if (context.dataset.label.includes('Forecast')) {
+                                    return 'Forecasted value';
+                                }
+                                return '';
                             }
                         }
                     }
@@ -276,7 +378,7 @@
         });
     }
 
-    // 2. Then render individual grade charts
+    // 2. Individual grade charts (keep your existing code)
     {% for grade in grades %}
     {
         // Find datasets for this grade
@@ -523,6 +625,73 @@
         
         // Add forecast separator line after charts are loaded
         setTimeout(addForecastSeparator, 500);
+    });
+</script>
+<script>
+        // Package Trends Chart
+    const packageMonths = JSON.parse('{{ package_months|escapejs }}');
+    const packageDatasets = JSON.parse('{{ package_datasets|escapejs }}');
+    
+    const trendCtx = document.getElementById('chart-package-trends').getContext('2d');
+    chartInstances['package-trends'] = new Chart(trendCtx, {
+        type: 'line',
+        data: {
+            labels: packageMonths,
+            datasets: packageDatasets
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'top',
+                    labels: {
+                        usePointStyle: true,
+                        padding: 20
+                    }
+                },
+                tooltip: {
+                    mode: 'index',
+                    intersect: false,
+                    callbacks: {
+                        label: function(context) {
+                            return `${context.dataset.label}: ${context.parsed.y.toLocaleString()} packages`;
+                        }
+                    }
+                }
+            },
+            scales: {
+                y: {
+                    beginAtZero: false,
+                    title: {
+                        display: true,
+                        text: 'Packages Sold',
+                        font: { weight: 'bold' }
+                    },
+                    ticks: {
+                        callback: function(value) {
+                            return value >= 1000 ? (value/1000).toFixed(0) + 'k' : value;
+                        }
+                    }
+                },
+                x: {
+                    title: {
+                        display: true,
+                        text: 'Month',
+                        font: { weight: 'bold' }
+                    }
+                }
+            },
+            interaction: {
+                mode: 'nearest',
+                axis: 'x',
+                intersect: false
+            },
+            animation: {
+                duration: 1000,
+                easing: 'easeInOutQuart'
+            }
+        }
     });
 </script>
 

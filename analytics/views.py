@@ -152,6 +152,34 @@ def dashboard(request):
                 'fill': False,
                 'tension': 0.2
             })
+       # Hardcoded time series package data
+    package_months = ['May-22', 'May-24', 'Jun-24', 'Aug-24', 'Dec-24', 'Jan-25', 'Apr-25', 'May-25', 'Jun-25']
+    
+    # Pkgs data by month for each grade
+    package_series = {
+        'BP1': [4960, 4360, 3680, 2480, 4760, 5760, 11040, 13640, 2920],
+        'PF1': [36480, 36960, 36160, 16200, 32280, 34280, 45560, 53060, 24240],
+        'DUST1': [5800, 6800, 5280, 6880, 5680, 5640, 7280, 7760, 5880],
+        'FNGS 1/2': [1280, 580, 520, 2500, 1140, 1420, 1220, 1660, 840],
+        'DUST 1/2': [360, 820, 480, 940, 640, 880, 520, 820, 600]
+    }
+
+    # Prepare datasets for Chart.js
+    package_datasets = []
+    colors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF']
+    
+    for idx, grade in enumerate(grades):
+        package_datasets.append({
+            'label': grade,
+            'data': package_series[grade],
+            'borderColor': colors[idx],
+            'backgroundColor': colors[idx] + '40',
+            'borderWidth': 2,
+            'pointRadius': 4,
+            'pointHoverRadius': 6,
+            'fill': False,
+            'tension': 0.3
+        })
     
     context = {
         'export_dates': json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
@@ -160,7 +188,9 @@ def dashboard(request):
         'grades': grades,
         'summary_stats': summary_stats,
         'total_data_points': len(export_data),
-        'forecast_months': 12
+        'forecast_months': 12,
+        'package_months': json.dumps(package_months),
+        'package_datasets': json.dumps(package_datasets)
     }
     
     return render(request, 'analytics/dashboard.html', context)
