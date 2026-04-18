@@ -177,7 +177,56 @@
         </div>
     </div>
 </div>
-
+<!-- evaluation results -->
+ {% if evaluation_results %}
+ <div class="row mt-4">
+    <div class="col-12">
+        <div class="card border-0 shadow-sm">
+            <div class="card-header bg-white border-bottom">
+                <div class="d-flex justify-content-between align-items-center">
+                    <h5 class="mb-0">
+                        <i class="fas fa-chart-line me-2 text-primary"></i>Model Performance 
+                    </h5>
+                    
+                </div>
+            </div>
+            <div class="card-body">
+                    <table class="table">
+                        <thead>
+                            <tr>
+                                <th>Grade</th>
+                                <th>MAE</th>
+                                <th>RMSE</th>
+                                <th>MAPE (%)</th>
+                                <th>Last Error (%)</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for grade, results in evaluation_results.items %}
+                            {% if results %}
+                            <tr>
+                                <td>{{ grade }}</td>
+                                <td>{{ results.mae|floatformat:2 }}</td>
+                                <td>{{ results.rmse|floatformat:2 }}</td>
+                                <td>{{ results.mape|floatformat:2 }}</td>
+                                <td>{{ results.error_pct|floatformat:2 }}</td>
+                            </tr>
+                            <!-- {% if results.plot_url %}
+                            <tr>
+                                <td colspan="5">
+                                    <img src="{{ results.plot_url }}" alt="{{ grade }} Evaluation" style="max-width: 100%;">
+                                </td>
+                            </tr>
+                            {% endif %} -->
+                            {% endif %}
+                            {% endfor %}
+                        </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endif %}
 {% endblock %}
 
 {% block extra_js %}

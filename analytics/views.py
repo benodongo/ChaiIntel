@@ -2,17 +2,20 @@ from django.shortcuts import render
 import pandas as pd
 import json
 import numpy as np
-from .utils import load_historical_data, forecast_prices
+from .rfutils import load_historical_data, forecast_prices
 
 def dashboard(request):
     # Load and prepare data
     export_data = load_historical_data()
     base_forecast = forecast_prices(export_data)
+    # Get evaluation results 
+    evaluation_results = forecast_prices(export_data, evaluate=True)
     
     # Merge actual and forecast data
     merged = pd.merge(export_data, base_forecast, on='date', how='outer').sort_values('date')
     
     grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
+
     colors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF']
     grade_datasets = []
     
@@ -190,7 +193,8 @@ def dashboard(request):
         'total_data_points': len(export_data),
         'forecast_months': 12,
         'package_months': json.dumps(package_months),
-        'package_datasets': json.dumps(package_datasets)
+        'package_datasets': json.dumps(package_datasets),
+        'evaluation_results': evaluation_results
     }
     
     return render(request, 'analytics/dashboard.html', context)
@@ -235,3 +239,4 @@ def api_forecast_single_grade(request, grade):
             })
     
     return JsonResponse(response_data)
+
