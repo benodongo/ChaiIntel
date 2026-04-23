@@ -1,806 +1,415 @@
 {% extends 'analytics/base.html' %}
-
 {% block title %}Dashboard | ChaiIntel{% endblock %}
 
 {% block content %}
-<div class="d-flex justify-content-between align-items-center mb-4">
-    <h2 class="mb-0">Tea Grade Forecasts</h2>
-    <div>
-        <span class="badge badge-tea me-2">
-            <i class="fas fa-calendar-alt me-1"></i> Historical & Forecast
-        </span>
-        <span class="badge bg-info text-dark">
-            <i class="fas fa-database me-1"></i>{{ total_data_points }} Data Points
-        </span>
-    </div>
+
+{# ── Summary metric cards ────────────────────────────────── #}
+<div class="section-heading animate-in">
+  <h2>Price Overview</h2>
+  <p>Current auction prices &amp; next-month forecasts · {{ total_data_points }} data points</p>
 </div>
 
-<!-- Summary Statistics Cards -->
-<div class="row mb-4">
-    {% for stat in summary_stats %}
-    <div class="col-lg-2 col-md-4 col-sm-6 mb-3">
-        <div class="card border-0 shadow-sm">
-            <div class="card-body text-center p-3">
-                <h6 class="card-title text-muted mb-1">{{ stat.grade }}</h6>
-                <h4 class="mb-1 text-primary">${{ stat.current_price }}</h4>
-                <small class="text-muted">Current</small>
-                <hr class="my-2">
-                <div class="d-flex justify-content-between align-items-center">
-                    <small class="text-muted">Next:</small>
-                    <strong class="text-success">${{ stat.next_forecast }}</strong>
-                </div>
-                <!-- <div class="mt-1">
-                    {% if stat.trend >= 0 %}
-                        <small class="text-success">
-                            <i class="fas fa-arrow-up"></i> +{{ stat.trend }}%
-                        </small>
-                    {% else %}
-                        <small class="text-danger">
-                            <i class="fas fa-arrow-down"></i> {{ stat.trend }}%
-                        </small>
-                    {% endif %}
-                </div> -->
-            </div>
-        </div>
+<div class="metric-grid">
+  {% for stat in summary_stats %}
+  <div class="metric-card animate-in">
+    <div class="metric-accent" style="background:{{ stat.color }}"></div>
+    <div class="metric-label">{{ stat.grade }}</div>
+    <div class="metric-price">{{ stat.current_price }}<span class="metric-unit"> ¢/kg</span></div>
+    <div class="metric-footer">
+      <span>
+        {% if stat.trend >= 0 %}
+          <span class="trend-up"><i class="fas fa-arrow-up" style="font-size:10px"></i> +{{ stat.trend }}%</span>
+        {% else %}
+          <span class="trend-down"><i class="fas fa-arrow-down" style="font-size:10px"></i> {{ stat.trend }}%</span>
+        {% endif %}
+        MoM
+      </span>
+      <span style="color:var(--muted);">→ <strong style="color:var(--ink)">{{ stat.next_forecast }}</strong></span>
     </div>
-    {% endfor %}
-</div>
-<!-- NEW: Combined Chart Section -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white border-bottom">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">
-                        <i class="fas fa-layer-group me-2 text-primary"></i>Combined Tea Grade Prices
-                    </h5>
-                    <div class="btn-group btn-group-sm" role="group">
-                        <button type="button" class="btn btn-outline-secondary" onclick="downloadChart('combined')">
-                            <i class="fas fa-download"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="card-body">
-                <div style="height: 400px;">
-                    <canvas id="chart-combined"></canvas>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-<!-- Price Forecast Charts -->
-<div class="row">
-    {% for grade in grades %}
-    <div class="col-lg-6 mb-4">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white border-bottom">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">
-                        <i class="fas fa-chart-line me-2 text-primary"></i>{{ grade }} Price Forecast
-                    </h5>
-                    <div class="btn-group btn-group-sm" role="group">
-                        <button type="button" class="btn btn-outline-secondary" onclick="toggleConfidenceInterval('{{ grade|slugify }}')">
-                            <i class="fas fa-eye"></i> Confidence
-                        </button>
-                        <button type="button" class="btn btn-outline-secondary" onclick="downloadChart('{{ grade|slugify }}')">
-                            <i class="fas fa-download"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="card-body">
-                <div style="height: 350px;">
-                    <canvas id="chart-{{ grade|slugify }}"></canvas>
-                </div>
-                
-                <!-- Grade Statistics -->
-                {% for stat in summary_stats %}
-                    {% if stat.grade == grade %}
-                    <div class="row mt-3 pt-3 border-top">
-                        <div class="col-4 text-center">
-                            <small class="text-muted d-block">Min</small>
-                            <strong>${{ stat.min_historical }}</strong>
-                        </div>
-                        <div class="col-4 text-center">
-                            <small class="text-muted d-block">Avg</small>
-                            <strong>${{ stat.avg_historical }}</strong>
-                        </div>
-                        <div class="col-4 text-center">
-                            <small class="text-muted d-block">Max</small>
-                            <strong>${{ stat.max_historical }}</strong>
-                        </div>
-                    </div>
-                    {% endif %}
-                {% endfor %}
-            </div>
-        </div>
-    </div>
-    {% endfor %}
+  </div>
+  {% endfor %}
 </div>
 
-<!-- Forecast Information Panel -->
-<!-- <div class="row mt-4">
-    <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-light">
-                <h5 class="mb-0">
-                    <i class="fas fa-info-circle me-2"></i>Forecast Information
-                </h5>
-            </div>
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-md-6">
-                        <h6 class="text-primary">Model Features</h6>
-                        <ul class="list-unstyled">
-                            <li><i class="fas fa-check text-success me-2"></i>Robust trend analysis</li>
-                            <li><i class="fas fa-check text-success me-2"></i>Non-negative price guarantee</li>
-                            <li><i class="fas fa-check text-success me-2"></i>Confidence intervals</li>
-                            <li><i class="fas fa-check text-success me-2"></i>Volatility dampening</li>
-                        </ul>
-                    </div>
-                    <div class="col-md-6">
-                        <h6 class="text-primary">Forecast Details</h6>
-                        <ul class="list-unstyled">
-                            <li><i class="fas fa-calendar me-2"></i>{{ forecast_months }} months ahead</li>
-                            <li><i class="fas fa-shield-alt me-2"></i>Minimum price floor: $50</li>
-                            <li><i class="fas fa-chart-line me-2"></i>Trend-dampened projections</li>
-                            <li><i class="fas fa-database me-2"></i>{{ total_data_points }} historical points</li>
-                        </ul>
-                    </div>
-                </div>
-            </div>
-        </div>
+{# ── Main chart ──────────────────────────────────────────── #}
+<div class="card animate-in" style="margin-bottom:28px">
+  <div class="card-header">
+    <span class="card-title"><i class="fas fa-chart-line"></i> All Grades — Price History &amp; Forecast</span>
+    <div style="display:flex;gap:8px">
+      <button class="btn btn-ghost" id="btn-toggle-forecast" onclick="toggleForecastLines()" style="font-size:12px;padding:5px 12px;">
+        <i class="fas fa-eye"></i> Forecast
+      </button>
+      <button class="btn btn-ghost" id="btn-toggle-ci" onclick="toggleCI()" style="font-size:12px;padding:5px 12px;">
+        <i class="fas fa-adjust"></i> Uncertainty
+      </button>
+      <button class="btn btn-ghost" onclick="downloadChart('combined')" style="font-size:12px;padding:5px 12px;">
+        <i class="fas fa-download"></i>
+      </button>
     </div>
-</div> -->
-<!-- Package Trends Over Time -->
-<div class="row mt-4">
-    <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white border-bottom">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">
-                        <i class="fas fa-chart-line me-2 text-primary"></i>Pkgs sold per grade Trends 
-                    </h5>
-                    <div class="btn-group btn-group-sm" role="group">
-                        <button type="button" class="btn btn-outline-secondary" onclick="downloadChart('package-trends')">
-                            <i class="fas fa-download"></i>
-                        </button>
-                    </div>
-                </div>
-            </div>
-            <div class="card-body">
-                <div style="height: 400px;">
-                    <canvas id="chart-package-trends"></canvas>
-                </div>
-            </div>
-        </div>
+  </div>
+  <div class="card-body">
+    <div class="chart-wrap" style="height:380px">
+      <canvas id="chart-combined"></canvas>
     </div>
+    <div class="forecast-note">
+      <i class="fas fa-info-circle" style="margin-top:1px;flex-shrink:0"></i>
+      <span>Dashed lines show 12-month Random Forest forecasts. Shaded bands are heuristic 80% uncertainty bounds
+      based on historical price volatility — not formal prediction intervals.</span>
+    </div>
+  </div>
 </div>
-<!-- evaluation results -->
- {% if evaluation_results %}
- <div class="row mt-4">
-    <div class="col-12">
-        <div class="card border-0 shadow-sm">
-            <div class="card-header bg-white border-bottom">
-                <div class="d-flex justify-content-between align-items-center">
-                    <h5 class="mb-0">
-                        <i class="fas fa-chart-line me-2 text-primary"></i>Model Performance 
-                    </h5>
-                    
-                </div>
-            </div>
-            <div class="card-body">
-                    <table class="table">
-                        <thead>
-                            <tr>
-                                <th>Grade</th>
-                                <th>MAE</th>
-                                <th>RMSE</th>
-                                <th>MAPE (%)</th>
-                                <th>Last Error (%)</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {% for grade, results in evaluation_results.items %}
-                            {% if results %}
-                            <tr>
-                                <td>{{ grade }}</td>
-                                <td>{{ results.mae|floatformat:2 }}</td>
-                                <td>{{ results.rmse|floatformat:2 }}</td>
-                                <td>{{ results.mape|floatformat:2 }}</td>
-                                <td>{{ results.error_pct|floatformat:2 }}</td>
-                            </tr>
-                            <!-- {% if results.plot_url %}
-                            <tr>
-                                <td colspan="5">
-                                    <img src="{{ results.plot_url }}" alt="{{ grade }} Evaluation" style="max-width: 100%;">
-                                </td>
-                            </tr>
-                            {% endif %} -->
-                            {% endif %}
-                            {% endfor %}
-                        </tbody>
-                </table>
-            </div>
-        </div>
+
+{# ── Tabs: Per-grade charts | Model comparison | Feature importance ── #}
+<div class="card animate-in" style="margin-bottom:28px">
+  <div class="card-body" style="padding-top:18px">
+
+    <div class="tab-group">
+      <button class="tab-btn active" onclick="switchTab('charts')">Price Forecasts</button>
+      <button class="tab-btn" onclick="switchTab('models')">Model Comparison</button>
+      <button class="tab-btn" onclick="switchTab('features')">Feature Importance</button>
     </div>
+
+    {# ── Per-grade charts ── #}
+    <div class="tab-panel active" id="tab-charts">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:20px">
+        {% for stat in summary_stats %}
+        <div>
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
+            <div style="display:flex;align-items:center;gap:8px">
+              <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{{ stat.color }}"></span>
+              <span style="font-weight:600;font-size:14px;color:var(--ink-2)">{{ stat.grade }}</span>
+            </div>
+            <button class="btn btn-ghost" onclick="downloadChart('{{ stat.grade_key }}')" style="font-size:11px;padding:3px 10px">
+              <i class="fas fa-download"></i>
+            </button>
+          </div>
+          <div class="chart-wrap" style="height:220px">
+            <canvas id="chart-{{ stat.grade_key }}"></canvas>
+          </div>
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
+            <span>Min: <strong style="color:var(--ink)">{{ stat.min_historical }}</strong></span>
+            <span>Avg: <strong style="color:var(--ink)">{{ stat.avg_historical }}</strong></span>
+            <span>Max: <strong style="color:var(--ink)">{{ stat.max_historical }}</strong></span>
+            <span>Next: <strong style="color:var(--green-mid)">{{ stat.next_forecast }}</strong></span>
+          </div>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+
+    {# ── Model comparison ── #}
+    <div class="tab-panel" id="tab-models">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:18px">
+        Walk-forward time-series cross-validation (TimeSeriesSplit). Lower MAE/RMSE/MAPE and higher R² = better.
+        <strong style="color:var(--green-mid)">Highlighted rows</strong> = best model per grade.
+      </p>
+      {% for row in model_comparison %}
+      <div style="margin-bottom:24px">
+        <div style="font-size:13px;font-weight:600;color:var(--ink-2);margin-bottom:8px;display:flex;align-items:center;gap:8px">
+          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{{ grade_colors|default:'{}' }}"></span>
+          {{ row.grade }}
+          <span style="font-size:11px;font-weight:400;color:var(--muted)">({{ row.grade_key }})</span>
+        </div>
+        <div class="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <th>Model</th>
+                <th>MAE (¢/kg)</th>
+                <th>RMSE (¢/kg)</th>
+                <th>MAPE (%)</th>
+                <th>R²</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              {% for m in row.models %}
+              <tr {% if m.best %}class="best-row"{% endif %}>
+                <td style="font-weight:500">{{ m.name }}</td>
+                <td>{{ m.mae }}</td>
+                <td>{{ m.rmse }}</td>
+                <td>{{ m.mape }}%</td>
+                <td>{{ m.r2 }}</td>
+                <td>{% if m.best %}<span class="badge badge-best">✓ Best</span>{% endif %}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endfor %}
+
+      <div class="forecast-note" style="margin-top:8px">
+        <i class="fas fa-flask" style="margin-top:1px;flex-shrink:0"></i>
+        <span>
+          Naïve model (last-value carry-forward) serves as a statistical baseline.
+          Any model that does not beat Naïve MAPE should not be used in production.
+          SARIMAX requires ≥8 observations; results marked — where unavailable.
+        </span>
+      </div>
+    </div>
+
+    {# ── Feature importance ── #}
+    <div class="tab-panel" id="tab-features">
+      <p style="font-size:13px;color:var(--muted);margin-bottom:18px">
+        Random Forest feature importances (mean decrease in impurity) trained on the full dataset.
+        Larger values = stronger influence on price prediction.
+      </p>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:20px">
+        {% for grade_key, chart_url in feature_charts.items %}
+        <div class="card" style="padding:16px;border:1px solid var(--border)">
+          {% if chart_url %}
+          <img src="{{ chart_url }}" alt="Feature importance for {{ grade_key }}"
+               style="width:100%;border-radius:6px">
+          {% else %}
+          <p style="font-size:13px;color:var(--muted);text-align:center;padding:20px 0">
+            Not enough data for {{ grade_key }}
+          </p>
+          {% endif %}
+        </div>
+        {% empty %}
+        <p style="font-size:13px;color:var(--muted)">No feature importance data available.</p>
+        {% endfor %}
+      </div>
+      <div class="forecast-note" style="margin-top:16px">
+        <i class="fas fa-info-circle" style="margin-top:1px;flex-shrink:0"></i>
+        <span>
+          Lag features (recent prices) typically dominate — this is expected for commodity time series.
+          Month/quarter features capture seasonal patterns. Time index captures long-run trend.
+        </span>
+      </div>
+    </div>
+
+  </div>
 </div>
-{% endif %}
+
+{# ── Data transparency panel ─────────────────────────────── #}
+<div class="card animate-in">
+  <div class="card-header">
+    <span class="card-title"><i class="fas fa-database"></i> Raw Auction Data</span>
+    <span class="pill pill-green">{{ total_data_points }} records</span>
+  </div>
+  <div class="card-body">
+    <div class="tbl-wrap">
+      <table id="raw-data-table">
+        <thead>
+          <tr>
+            <th>Date</th>
+            <th>BP1 (¢/kg)</th>
+            <th>PF1 (¢/kg)</th>
+            <th>DUST1 (¢/kg)</th>
+            <th>FNGS 1/2 (¢/kg)</th>
+            <th>DUST 1/2 (¢/kg)</th>
+          </tr>
+        </thead>
+        <tbody id="raw-data-body">
+          <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px">Loading...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
 {% endblock %}
 
 {% block extra_js %}
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script>
-    // Chart.js global defaults
-    Chart.defaults.color = '#6c757d';
-    Chart.defaults.borderColor = 'rgba(0, 0, 0, 0.05)';
-    Chart.defaults.font.family = "'Inter', -apple-system, BlinkMacSystemFont, sans-serif";
-    Chart.defaults.plugins.legend.position = 'top';
+// ── Data from Django ──────────────────────────────────────────────────────
+const exportDates  = JSON.parse('{{ export_dates|escapejs }}');
+const gradeDatasets = JSON.parse('{{ grade_datasets|escapejs }}');
 
-    // Color palette
-    const colors = {
-        primary: '#2c8a5a',
-        forecast: '#3a86ff',
-        confidence: 'rgba(58, 134, 255, 0.1)',
-        success: '#28a745',
-        warning: '#ffc107',
-        danger: '#dc3545'
-    };
+const GRADE_KEYS   = ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2'];
+const GRADE_LABELS = { BP1:'BP1', PF1:'PF1', DUST1:'DUST1', FNGS_1_2:'FNGS 1/2', DUST_1_2:'DUST 1/2' };
+const GRADE_COLORS = { BP1:'#2D6A4F', PF1:'#52B788', DUST1:'#F4A261', FNGS_1_2:'#E76F51', DUST_1_2:'#8338EC' };
 
-    const exportDates = JSON.parse('{{ export_dates|escapejs }}');
-    const gradeDatasets = JSON.parse('{{ grade_datasets|escapejs }}');
-    const combinedDatasets = JSON.parse('{{ combined_datasets|escapejs }}');
-    
-    // Store chart instances for later manipulation
-    const chartInstances = {};
+const chartInstances = {};
 
-    // 1. Combined Chart with Forecast and Confidence Intervals
-    if (combinedDatasets.length > 0) {
-        const ctx = document.getElementById('chart-combined').getContext('2d');
-        
-        // Process datasets to add forecast styling and confidence intervals
-        const processedDatasets = [];
-        const grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2'];
-        const gradeColors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF'];
-        
-        grades.forEach((grade, idx) => {
-            // Find actual and forecast datasets
-            const actual = combinedDatasets.find(d => d.label === `${grade} Actual`);
-            const forecast = combinedDatasets.find(d => d.label === `${grade} Forecast`);
-            
-            if (actual) {
-                processedDatasets.push({
-                    ...actual,
-                    borderColor: gradeColors[idx],
-                    backgroundColor: gradeColors[idx] + '20',
-                    borderWidth: 3,
-                    pointRadius: 5,
-                    pointHoverRadius: 7,
-                    fill: false,
-                    tension: 0.1
-                });
-            }
-            
-            if (forecast) {
-                processedDatasets.push({
-                    ...forecast,
-                    borderColor: gradeColors[idx],
-                    backgroundColor: gradeColors[idx] + '10',
-                    borderDash: [8, 4],  // Dotted line for forecast
-                    borderWidth: 2,
-                    pointRadius: 3,
-                    pointHoverRadius: 5,
-                    fill: false,
-                    tension: 0.2
-                });
-                
-                // Add confidence intervals if available
-                const lower = gradeDatasets.find(d => d.label === `${grade} Lower Bound`);
-                const upper = gradeDatasets.find(d => d.label === `${grade} Confidence Range`);
-                
-                if (lower && upper) {
-                    processedDatasets.push({
-                        label: `${grade} Confidence Range`,
-                        data: upper.data,
-                        borderColor: gradeColors[idx] + '40',
-                        backgroundColor: gradeColors[idx] + '15',
-                        borderWidth: 1,
-                        pointRadius: 0,
-                        fill: '+1',  // Fill to next dataset (lower bound)
-                        tension: 0.2
-                    });
-                    
-                    processedDatasets.push({
-                        label: `${grade} Lower Bound`,
-                        data: lower.data,
-                        borderColor: gradeColors[idx] + '40',
-                        backgroundColor: gradeColors[idx] + '15',
-                        borderWidth: 1,
-                        pointRadius: 0,
-                        fill: false,
-                        tension: 0.2
-                    });
-                }
-            }
-        });
-        
-        chartInstances['combined'] = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: exportDates,
-                datasets: processedDatasets
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                plugins: {
-                    legend: {
-                        position: 'top',
-                        labels: {
-                            usePointStyle: true,
-                            pointStyle: 'circle',
-                            padding: 20,
-                            font: { size: 12 },
-                            filter: function(item, chart) {
-                                // Hide confidence intervals from legend
-                                return !item.text.includes('Confidence') && 
-                                       !item.text.includes('Lower Bound');
-                            }
-                        }
-                    },
-                    tooltip: {
-                        mode: 'index',
-                        intersect: false,
-                        backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                        titleColor: '#fff',
-                        bodyColor: '#fff',
-                        borderColor: '#ddd',
-                        borderWidth: 1,
-                        callbacks: {
-                            label: function(context) {
-                                const label = context.dataset.label.replace(' Actual', '')
-                                                                   .replace(' Forecast', '')
-                                                                   .replace(' Confidence Range', '');
-                                if (context.parsed.y !== null) {
-                                    return `${label}: $${context.parsed.y.toFixed(2)}`;
-                                }
-                                return null;
-                            },
-                            afterLabel: function(context) {
-                                if (context.dataset.label.includes('Forecast')) {
-                                    return 'Forecasted value';
-                                }
-                                return '';
-                            }
-                        }
-                    }
-                },
-                scales: {
-                    x: {
-                        grid: { 
-                            display: true,
-                            color: 'rgba(0, 0, 0, 0.03)'
-                        },
-                        title: { 
-                            display: true, 
-                            text: 'Timeline',
-                            font: { weight: 'bold' }
-                        },
-                        ticks: {
-                            callback: function(value, index) {
-                                const date = new Date(this.getLabelForValue(value));
-                                return date.toLocaleDateString('en-US', { 
-                                    month: 'short', 
-                                    year: '2-digit' 
-                                });
-                            }
-                        }
-                    },
-                    y: {
-                        beginAtZero: false,
-                        title: { 
-                            display: true, 
-                            text: 'Price (USD)',
-                            font: { weight: 'bold' }
-                        },
-                        grid: { 
-                            color: 'rgba(0, 0, 0, 0.03)' 
-                        },
-                        ticks: {
-                            callback: function(value) {
-                                return '$' + value.toFixed(0);
-                            }
-                        }
-                    }
-                },
-                interaction: {
-                    mode: 'nearest',
-                    axis: 'x',
-                    intersect: false
-                },
-                animation: {
-                    duration: 1000,
-                    easing: 'easeInOutQuart'
-                }
-            }
-        });
-    }
-
-    // 2. Individual grade charts (keep your existing code)
-    {% for grade in grades %}
-    {
-        // Find datasets for this grade
-        const gradeActual = gradeDatasets.find(d => d.label === '{{ grade }} Actual');
-        const gradeForecast = gradeDatasets.find(d => d.label === '{{ grade }} Forecast');
-        const gradeConfidenceUpper = gradeDatasets.find(d => d.label === '{{ grade }} Confidence Range');
-        const gradeConfidenceLower = gradeDatasets.find(d => d.label === '{{ grade }} Lower Bound');
-
-        if (gradeActual && gradeForecast) {
-            const ctx = document.getElementById('chart-{{ grade|slugify }}').getContext('2d');
-            
-            // Prepare datasets array
-            const datasets = [
-                {
-                    label: 'Actual {{ grade }}',
-                    data: gradeActual.data,
-                    borderColor: colors.primary,
-                    backgroundColor: colors.primary + '20',
-                    borderWidth: 3,
-                    pointRadius: 5,
-                    pointHoverRadius: 7,
-                    pointBackgroundColor: colors.primary,
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2,
-                    fill: false,
-                    tension: 0.1,
-                    spanGaps: true
-                },
-                {
-                    label: 'Forecast {{ grade }}',
-                    data: gradeForecast.data,
-                    borderColor: colors.forecast,
-                    backgroundColor: colors.forecast + '20',
-                    borderDash: [8, 4],
-                    borderWidth: 2,
-                    pointRadius: 3,
-                    pointHoverRadius: 5,
-                    pointBackgroundColor: colors.forecast,
-                    pointBorderColor: '#fff',
-                    pointBorderWidth: 2,
-                    fill: false,
-                    tension: 0.2,
-                    spanGaps: true
-                }
-            ];
-
-            // Add confidence intervals if available
-            if (gradeConfidenceUpper && gradeConfidenceLower) {
-                datasets.push({
-                    label: 'Confidence Range',
-                    data: gradeConfidenceUpper.data,
-                    borderColor: 'transparent',
-                    backgroundColor: colors.confidence,
-                    pointRadius: 0,
-                    fill: '+1',
-                    tension: 0.2,
-                    spanGaps: true
-                });
-                
-                datasets.push({
-                    label: 'Confidence Lower',
-                    data: gradeConfidenceLower.data,
-                    borderColor: 'transparent',
-                    backgroundColor: colors.confidence,
-                    pointRadius: 0,
-                    fill: false,
-                    tension: 0.2,
-                    spanGaps: true
-                });
-            }
-
-            const chartConfig = {
-                type: 'line',
-                data: {
-                    labels: exportDates,
-                    datasets: datasets
-                },
-                options: {
-                    responsive: true,
-                    maintainAspectRatio: false,
-                    spanGaps: true,
-                    plugins: {
-                        legend: { 
-                            position: 'top',
-                            labels: {
-                                filter: function(legendItem, chartData) {
-                                    // Hide confidence bound labels from legend
-                                    return !legendItem.text.includes('Confidence') && !legendItem.text.includes('Lower');
-                                }
-                            }
-                        },
-                        title: { display: false },
-                        tooltip: {
-                            mode: 'index',
-                            intersect: false,
-                            backgroundColor: 'rgba(0, 0, 0, 0.8)',
-                            titleColor: '#fff',
-                            bodyColor: '#fff',
-                            borderColor: '#ddd',
-                            borderWidth: 1,
-                            callbacks: {
-                                label: function(context) {
-                                    if (context.raw !== null && context.raw !== undefined) {
-                                        const value = typeof context.raw === 'number' ? context.raw : context.raw.y || context.raw;
-                                        return context.dataset.label + ': $' + value.toFixed(2);
-                                    }
-                                    return null;
-                                },
-                                afterBody: function(tooltipItems) {
-                                    const dataPoint = tooltipItems[0];
-                                    if (dataPoint && dataPoint.dataIndex < exportDates.length) {
-                                        const date = new Date(exportDates[dataPoint.dataIndex]);
-                                        const now = new Date();
-                                        const isForecast = date > now;
-                                        
-                                        if (isForecast) {
-                                            return ['', '⚠️ Forecast data - actual results may vary'];
-                                        }
-                                    }
-                                    return '';
-                                }
-                            }
-                        }
-                    },
-                    interaction: {
-                        mode: 'nearest',
-                        axis: 'x',
-                        intersect: false
-                    },
-                    scales: {
-                        x: { 
-                            grid: { 
-                                display: true,
-                                color: 'rgba(0, 0, 0, 0.03)'
-                            },
-                            title: { 
-                                display: true, 
-                                text: 'Timeline',
-                                font: { weight: 'bold' }
-                            },
-                            ticks: {
-                                callback: function(value, index) {
-                                    const date = new Date(this.getLabelForValue(value));
-                                    return date.toLocaleDateString('en-US', { 
-                                        month: 'short', 
-                                        year: '2-digit' 
-                                    });
-                                }
-                            }
-                        },
-                        y: { 
-                            title: { 
-                                display: true, 
-                                text: 'Price (USD)',
-                                font: { weight: 'bold' }
-                            },
-                            grid: { 
-                                color: 'rgba(0, 0, 0, 0.03)' 
-                            },
-                            ticks: {
-                                callback: function(value) {
-                                    return '$' + value.toFixed(0);
-                                }
-                            },
-                            min: 0 // Ensure y-axis starts at 0
-                        }
-                    },
-                    animation: {
-                        duration: 1000,
-                        easing: 'easeInOutQuart'
-                    }
-                }
-            };
-
-            chartInstances['{{ grade|slugify }}'] = new Chart(ctx, chartConfig);
+// ── Shared Chart.js options ───────────────────────────────────────────────
+function baseOptions(showLegend = true) {
+  return {
+    responsive: true,
+    maintainAspectRatio: false,
+    spanGaps: true,
+    interaction: { mode: 'index', intersect: false, axis: 'x' },
+    plugins: {
+      legend: {
+        display: showLegend,
+        position: 'top',
+        labels: {
+          filter: item => !item.text.includes('Upper') && !item.text.includes('Lower'),
+          boxWidth: 24,
+          boxHeight: 3,
+          usePointStyle: false,
+          padding: 16,
+          font: { size: 12 }
         }
-    }
-    {% endfor %}
-
-    // Utility functions
-    function toggleConfidenceInterval(gradeSlug) {
-        const chart = chartInstances[gradeSlug];
-        if (chart) {
-            const confidenceDatasets = chart.data.datasets.filter(d => 
-                d.label.includes('Confidence') || d.label.includes('Lower')
-            );
-            
-            confidenceDatasets.forEach(dataset => {
-                dataset.hidden = !dataset.hidden;
-            });
-            
-            chart.update();
+      },
+      tooltip: {
+        backgroundColor: '#0D2818',
+        titleColor: '#B7E4C7',
+        bodyColor: '#ffffff',
+        borderColor: '#2D6A4F',
+        borderWidth: 1,
+        padding: 10,
+        callbacks: {
+          label: ctx => {
+            if (ctx.raw === null || ctx.raw === undefined) return null;
+            const v = typeof ctx.raw === 'number' ? ctx.raw : ctx.raw.y || ctx.raw;
+            return `${ctx.dataset.label}: ${v.toFixed(1)} ¢/kg`;
+          }
         }
-    }
-
-    function downloadChart(gradeSlug) {
-        const chart = chartInstances[gradeSlug];
-        if (chart) {
-            const link = document.createElement('a');
-            link.download = `${gradeSlug}_forecast_chart.png`;
-            link.href = chart.toBase64Image();
-            link.click();
+      }
+    },
+    scales: {
+      x: {
+        grid: { color: 'rgba(0,0,0,0.03)' },
+        ticks: {
+          font: { size: 11 },
+          callback: (val, idx) => {
+            const d = new Date(exportDates[idx]);
+            return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+          },
+          maxTicksLimit: 14
         }
-    }
-
-    // Add visual separator for forecast vs actual data
-    function addForecastSeparator() {
-        const now = new Date();
-        const currentDateIndex = exportDates.findIndex(dateStr => {
-            const date = new Date(dateStr);
-            return date > now;
-        });
-
-        if (currentDateIndex > 0) {
-            Object.values(chartInstances).forEach(chart => {
-                // Add a plugin to draw a vertical line separating historical and forecast data
-                chart.options.plugins.annotation = {
-                    annotations: {
-                        line1: {
-                            type: 'line',
-                            xMin: currentDateIndex - 0.5,
-                            xMax: currentDateIndex - 0.5,
-                            borderColor: 'rgba(255, 99, 132, 0.5)',
-                            borderWidth: 2,
-                            borderDash: [5, 5],
-                            label: {
-                                enabled: true,
-                                content: 'Forecast',
-                                position: 'start'
-                            }
-                        }
-                    }
-                };
-                chart.update();
-            });
+      },
+      y: {
+        grid: { color: 'rgba(0,0,0,0.04)' },
+        title: { display: true, text: '¢ / kg', font: { size: 11 } },
+        ticks: {
+          font: { size: 11 },
+          callback: v => v.toFixed(0)
         }
-    }
+      }
+    },
+    animation: { duration: 800, easing: 'easeInOutQuart' }
+  };
+}
 
-    // Initialize page
-    document.addEventListener('DOMContentLoaded', function() {
-        // Add any additional initialization here
-        console.log('Tea Grade Forecast Dashboard Loaded');
-        console.log(`Displaying ${Object.keys(chartInstances).length} forecast charts`);
-        
-        // Add forecast separator line after charts are loaded
-        setTimeout(addForecastSeparator, 500);
+// ── Combined chart ────────────────────────────────────────────────────────
+(function() {
+  const ctx = document.getElementById('chart-combined').getContext('2d');
+  chartInstances['combined'] = new Chart(ctx, {
+    type: 'line',
+    data: { labels: exportDates, datasets: gradeDatasets },
+    options: baseOptions(true)
+  });
+})();
+
+// ── Per-grade charts ──────────────────────────────────────────────────────
+GRADE_KEYS.forEach(grade => {
+  const canvas = document.getElementById(`chart-${grade}`);
+  if (!canvas) return;
+
+  const relevant = gradeDatasets.filter(d =>
+    d.label.startsWith(GRADE_LABELS[grade])
+  );
+
+  const ctx = canvas.getContext('2d');
+  const opts = baseOptions(false);
+  opts.plugins.legend.display = false;
+
+  chartInstances[grade] = new Chart(ctx, {
+    type: 'line',
+    data: { labels: exportDates, datasets: relevant },
+    options: opts
+  });
+});
+
+// ── Toggle helpers ────────────────────────────────────────────────────────
+let forecastVisible = true;
+let ciVisible = false;
+
+function toggleForecastLines() {
+  forecastVisible = !forecastVisible;
+  const chart = chartInstances['combined'];
+  chart.data.datasets.forEach(d => {
+    if (d.label && d.label.includes('Forecast')) d.hidden = !forecastVisible;
+  });
+  chart.update();
+  document.getElementById('btn-toggle-forecast').style.opacity = forecastVisible ? '1' : '0.5';
+}
+
+function toggleCI() {
+  ciVisible = !ciVisible;
+  const chart = chartInstances['combined'];
+  chart.data.datasets.forEach(d => {
+    if (d.label && (d.label.includes('Upper') || d.label.includes('Lower'))) {
+      d.hidden = !ciVisible;
+    }
+  });
+  chart.update();
+  document.getElementById('btn-toggle-ci').style.opacity = ciVisible ? '1' : '0.5';
+}
+
+// Hide CI bands by default
+(function() {
+  const chart = chartInstances['combined'];
+  chart.data.datasets.forEach(d => {
+    if (d.label && (d.label.includes('Upper') || d.label.includes('Lower'))) {
+      d.hidden = true;
+    }
+  });
+  chart.update();
+})();
+
+// ── Download chart ────────────────────────────────────────────────────────
+function downloadChart(key) {
+  const chart = chartInstances[key];
+  if (!chart) return;
+  const a = document.createElement('a');
+  a.download = `chaiintel_${key}.png`;
+  a.href = chart.toBase64Image('image/png', 1);
+  a.click();
+}
+
+// ── Tabs ──────────────────────────────────────────────────────────────────
+function switchTab(name) {
+  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+  document.getElementById(`tab-${name}`).classList.add('active');
+  event.target.classList.add('active');
+
+  // Resize charts when tab becomes visible
+  setTimeout(() => {
+    GRADE_KEYS.forEach(g => {
+      if (chartInstances[g]) chartInstances[g].resize();
     });
-</script>
-<script>
-        // Package Trends Chart
-    const packageMonths = JSON.parse('{{ package_months|escapejs }}');
-    const packageDatasets = JSON.parse('{{ package_datasets|escapejs }}');
-    
-    const trendCtx = document.getElementById('chart-package-trends').getContext('2d');
-    chartInstances['package-trends'] = new Chart(trendCtx, {
-        type: 'line',
-        data: {
-            labels: packageMonths,
-            datasets: packageDatasets
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            plugins: {
-                legend: {
-                    position: 'top',
-                    labels: {
-                        usePointStyle: true,
-                        padding: 20
-                    }
-                },
-                tooltip: {
-                    mode: 'index',
-                    intersect: false,
-                    callbacks: {
-                        label: function(context) {
-                            return `${context.dataset.label}: ${context.parsed.y.toLocaleString()} packages`;
-                        }
-                    }
-                }
-            },
-            scales: {
-                y: {
-                    beginAtZero: false,
-                    title: {
-                        display: true,
-                        text: 'Packages Sold',
-                        font: { weight: 'bold' }
-                    },
-                    ticks: {
-                        callback: function(value) {
-                            return value >= 1000 ? (value/1000).toFixed(0) + 'k' : value;
-                        }
-                    }
-                },
-                x: {
-                    title: {
-                        display: true,
-                        text: 'Month',
-                        font: { weight: 'bold' }
-                    }
-                }
-            },
-            interaction: {
-                mode: 'nearest',
-                axis: 'x',
-                intersect: false
-            },
-            animation: {
-                duration: 1000,
-                easing: 'easeInOutQuart'
-            }
-        }
-    });
-</script>
+  }, 50);
+}
 
-<style>
-    .badge-tea {
-        background-color: #2c8a5a;
-        color: white;
-    }
-    
-    .card {
-        transition: transform 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
-    }
-    
-    .card:hover {
-        transform: translateY(-2px);
-        box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1) !important;
-    }
-    
-    .btn-group-sm .btn {
-        font-size: 0.75rem;
-        padding: 0.25rem 0.5rem;
-    }
-    
-    canvas {
-        background: linear-gradient(135deg, #f8f9fa 0%, #ffffff 100%);
-        border-radius: 8px;
-    }
-    
-    .text-primary {
-        color: #2c8a5a !important;
-    }
-    
-    .border-top {
-        border-color: #e9ecef !important;
-    }
-    
-    /* Combined chart specific styles */
-    #chart-combined {
-        border: 1px solid rgba(0,0,0,0.05);
-    }
-    
-    .chart-legend {
-        display: flex;
-        flex-wrap: wrap;
-        justify-content: center;
-        margin-top: 10px;
-    }
-    
-    .legend-item {
-        display: flex;
-        align-items: center;
-        margin: 0 10px;
-        cursor: pointer;
-    }
-    
-    .legend-color {
-        width: 12px;
-        height: 12px;
-        border-radius: 50%;
-        margin-right: 5px;
-    }
-</style>
+// ── Raw data table ────────────────────────────────────────────────────────
+(function buildRawTable() {
+  const grades = ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2'];
+  const allDatasets = {};
+  gradeDatasets.forEach(d => {
+    const gkey = grades.find(g => d.label.startsWith(GRADE_LABELS[g]) && d.label.includes('Actual'));
+    if (gkey) allDatasets[gkey] = d.data;
+  });
+
+  const tbody = document.getElementById('raw-data-body');
+  tbody.innerHTML = '';
+
+  exportDates.forEach((dateStr, i) => {
+    const row = document.createElement('tr');
+    const d = new Date(dateStr);
+    const label = isNaN(d) ? dateStr : d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
+
+    let hasData = grades.some(g => allDatasets[g] && allDatasets[g][i] !== null);
+    if (!hasData) return;
+
+    const cells = [`<td>${label}</td>`];
+    grades.forEach(g => {
+      const val = allDatasets[g] && allDatasets[g][i] !== null && allDatasets[g][i] !== undefined
+        ? parseFloat(allDatasets[g][i]).toFixed(1)
+        : '—';
+      cells.push(`<td>${val}</td>`);
+    });
+
+    row.innerHTML = cells.join('');
+    tbody.appendChild(row);
+  });
+
+  document.getElementById('sidebar-data-count').textContent =
+    document.querySelectorAll('#raw-data-body tr').length;
+})();
+</script>
 {% endblock %}

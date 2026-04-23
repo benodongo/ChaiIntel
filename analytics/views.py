@@ -1,242 +1,169 @@
 from django.shortcuts import render
+from django.http import JsonResponse
 import pandas as pd
 import json
 import numpy as np
-from .rfutils import load_historical_data, forecast_prices
+from .rfutils import (
+    load_historical_data, forecast_prices, get_model_evaluation,
+    get_feature_importance_chart, GRADES, GRADE_LABELS
+)
+
+
+GRADE_COLORS = {
+    'BP1':      '#2D6A4F',
+    'PF1':      '#52B788',
+    'DUST1':    '#F4A261',
+    'FNGS_1_2': '#E76F51',
+    'DUST_1_2': '#8338EC',
+}
+
 
 def dashboard(request):
-    # Load and prepare data
-    export_data = load_historical_data()
-    base_forecast = forecast_prices(export_data)
-    # Get evaluation results 
-    evaluation_results = forecast_prices(export_data, evaluate=True)
-    
-    # Merge actual and forecast data
-    merged = pd.merge(export_data, base_forecast, on='date', how='outer').sort_values('date')
-    
-    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
+    export_data     = load_historical_data()
+    base_forecast   = forecast_prices(export_data)
+    evaluation_results = get_model_evaluation(export_data)
 
-    colors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF']
+    merged = pd.merge(export_data, base_forecast, on='date', how='outer').sort_values('date')
+
+    # ── Chart datasets ──────────────────────────────────────────────────────
     grade_datasets = []
-    
-    for idx, grade in enumerate(grades):
-        # Actual prices - keep None for missing values
-        actual_prices = [val if not pd.isna(val) else None for val in merged[grade]]
-        
-        # Forecast values - ensure they're never zero or negative
-        forecast_col = f'forecast_{grade}'
-        if forecast_col in merged.columns:
-            forecast_values = []
-            for val in merged[forecast_col]:
-                if pd.isna(val):
-                    forecast_values.append(None)
-                else:
-                    # Ensure minimum viable price
-                    forecast_values.append(max(val, 50))  # Minimum 50 units
-        else:
-            forecast_values = [None] * len(merged)
-        
-        # Add actual price line
+    for grade, color in GRADE_COLORS.items():
+        if grade not in merged.columns:
+            continue
+
+        actual_prices = [
+            float(v) if not pd.isna(v) else None for v in merged[grade]
+        ]
         grade_datasets.append({
-            'label': f'{grade} Actual',
+            'label': f'{GRADE_LABELS[grade]} Actual',
             'data': actual_prices,
-            'borderColor': colors[idx],
-            'backgroundColor': colors[idx] + '20',  # Add transparency
-            'borderWidth': 3,
-            'pointRadius': 5,
+            'borderColor': color,
+            'backgroundColor': color + '22',
+            'borderWidth': 2.5,
+            'pointRadius': 4,
             'pointHoverRadius': 7,
             'fill': False,
-            'tension': 0.1
+            'tension': 0.2,
         })
-        
-        # Add forecast line
-        grade_datasets.append({
-            'label': f'{grade} Forecast',
-            'data': forecast_values,
-            'borderColor': colors[idx],
-            'backgroundColor': colors[idx] + '10',
-            'borderDash': [8, 4],
-            'borderWidth': 2,
-            'pointRadius': 3,
-            'pointHoverRadius': 5,
-            'fill': False,
-            'tension': 0.2
-        })
-        
-        # Add confidence intervals if available
-        lower_col = f'forecast_{grade}_lower'
-        upper_col = f'forecast_{grade}_upper'
-        
-        if lower_col in merged.columns and upper_col in merged.columns:
-            # Lower confidence bound
-            lower_values = [val if not pd.isna(val) else None for val in merged[lower_col]]
-            upper_values = [val if not pd.isna(val) else None for val in merged[upper_col]]
-            
-            grade_datasets.append({
-                'label': f'{grade} Confidence Range',
-                'data': upper_values,
-                'borderColor': colors[idx] + '40',
-                'backgroundColor': colors[idx] + '15',
-                'borderWidth': 1,
-                'pointRadius': 0,
-                'fill': '+1',  # Fill to previous dataset (lower bound)
-                'tension': 0.2
-            })
-            
-            grade_datasets.append({
-                'label': f'{grade} Lower Bound',
-                'data': lower_values,
-                'borderColor': colors[idx] + '40',
-                'backgroundColor': colors[idx] + '15',
-                'borderWidth': 1,
-                'pointRadius': 0,
-                'fill': False,
-                'tension': 0.2
-            })
-    
-    # Calculate summary statistics for the template
-    summary_stats = []
-    for grade in grades:
-        actual_data = merged[grade].dropna()
-        forecast_col = f'forecast_{grade}'
-        
-        if len(actual_data) > 0:
-            current_price = actual_data.iloc[-1] if len(actual_data) > 0 else 0
-            
-            # Get next month's forecast
-            future_forecasts = merged[merged['date'] > export_data['date'].max()][forecast_col].dropna()
-            next_forecast = future_forecasts.iloc[0] if len(future_forecasts) > 0 else current_price
-            
-            # Calculate trend
-            if len(actual_data) >= 2:
-                trend = ((actual_data.iloc[-1] - actual_data.iloc[-2]) / actual_data.iloc[-2]) * 100
-            else:
-                trend = 0
-            
-            summary_stats.append({
-                'grade': grade,
-                'current_price': round(current_price, 2),
-                'next_forecast': round(max(next_forecast, 50), 2),  # Ensure minimum
-                'trend': round(trend, 1),
-                'min_historical': round(actual_data.min(), 2),
-                'max_historical': round(actual_data.max(), 2),
-                'avg_historical': round(actual_data.mean(), 2)
-            })
 
-    # Create combined dataset (actual prices only) - THIS WAS MISINDENTED BEFORE
-    combined_data  = []
-    for idx, grade in enumerate(grades):
-        # Actual prices
-        actual_prices = [val if not pd.isna(val) else None for val in merged[grade]]
-        combined_data.append({
-            'label': f'{grade} Actual',
-            'data': actual_prices,
-            'borderColor': colors[idx],
-            'backgroundColor': colors[idx] + '20',
-            'borderWidth': 2,
-            'pointRadius': 3,
-            'pointHoverRadius': 5,
-            'fill': False,
-            'tension': 0.1
-        })
-         # Forecast values
-        forecast_col = f'forecast_{grade}'
-        if forecast_col in merged.columns:
-            forecast_values = [max(val, 50) if not pd.isna(val) else None for val in merged[forecast_col]]
-            combined_data.append({
-                'label': f'{grade} Forecast',
-                'data': forecast_values,
-                'borderColor': colors[idx],
-                'backgroundColor': colors[idx] + '10',
-                'borderDash': [8, 4],  # Dashed line for forecast
-                'borderWidth': 2,
-                'pointRadius': 3,
+        fc_col = f'forecast_{grade}'
+        if fc_col in merged.columns:
+            fc_vals = [
+                float(v) if not pd.isna(v) else None for v in merged[fc_col]
+            ]
+            grade_datasets.append({
+                'label': f'{GRADE_LABELS[grade]} Forecast',
+                'data': fc_vals,
+                'borderColor': color,
+                'backgroundColor': color + '11',
+                'borderDash': [8, 4],
+                'borderWidth': 1.8,
+                'pointRadius': 2,
                 'pointHoverRadius': 5,
                 'fill': False,
-                'tension': 0.2
+                'tension': 0.2,
             })
-       # Hardcoded time series package data
-    package_months = ['May-22', 'May-24', 'Jun-24', 'Aug-24', 'Dec-24', 'Jan-25', 'Apr-25', 'May-25', 'Jun-25']
-    
-    # Pkgs data by month for each grade
-    package_series = {
-        'BP1': [4960, 4360, 3680, 2480, 4760, 5760, 11040, 13640, 2920],
-        'PF1': [36480, 36960, 36160, 16200, 32280, 34280, 45560, 53060, 24240],
-        'DUST1': [5800, 6800, 5280, 6880, 5680, 5640, 7280, 7760, 5880],
-        'FNGS 1/2': [1280, 580, 520, 2500, 1140, 1420, 1220, 1660, 840],
-        'DUST 1/2': [360, 820, 480, 940, 640, 880, 520, 820, 600]
-    }
 
-    # Prepare datasets for Chart.js
-    package_datasets = []
-    colors = ['#4CAF50', '#36A2EB', '#FF6384', '#FFCE56', '#9966FF']
-    
-    for idx, grade in enumerate(grades):
-        package_datasets.append({
-            'label': grade,
-            'data': package_series[grade],
-            'borderColor': colors[idx],
-            'backgroundColor': colors[idx] + '40',
-            'borderWidth': 2,
-            'pointRadius': 4,
-            'pointHoverRadius': 6,
-            'fill': False,
-            'tension': 0.3
+        lower_col = f'{fc_col}_lower'
+        upper_col = f'{fc_col}_upper'
+        if lower_col in merged.columns and upper_col in merged.columns:
+            grade_datasets.append({
+                'label': f'{GRADE_LABELS[grade]} Upper',
+                'data': [float(v) if not pd.isna(v) else None for v in merged[upper_col]],
+                'borderColor': color + '40',
+                'backgroundColor': color + '14',
+                'borderWidth': 0,
+                'pointRadius': 0,
+                'fill': '+1',
+                'tension': 0.2,
+            })
+            grade_datasets.append({
+                'label': f'{GRADE_LABELS[grade]} Lower',
+                'data': [float(v) if not pd.isna(v) else None for v in merged[lower_col]],
+                'borderColor': color + '40',
+                'backgroundColor': color + '14',
+                'borderWidth': 0,
+                'pointRadius': 0,
+                'fill': False,
+                'tension': 0.2,
+            })
+
+    # ── Summary stats cards ─────────────────────────────────────────────────
+    summary_stats = []
+    for grade in GRADES:
+        if grade not in merged.columns:
+            continue
+        actual = merged[grade].dropna()
+        if len(actual) == 0:
+            continue
+
+        fc_col = f'forecast_{grade}'
+        future_fc = merged[merged['date'] > export_data['date'].max()][fc_col].dropna()
+        next_fc   = float(future_fc.iloc[0]) if len(future_fc) > 0 else float(actual.iloc[-1])
+
+        trend = 0.0
+        if len(actual) >= 2:
+            trend = (float(actual.iloc[-1]) - float(actual.iloc[-2])) / float(actual.iloc[-2]) * 100
+
+        # Best model name for this grade
+        best_model = 'RF'
+        if grade in evaluation_results:
+            best_model = evaluation_results[grade].get('best_model', 'RF')
+
+        summary_stats.append({
+            'grade':           GRADE_LABELS[grade],
+            'grade_key':       grade,
+            'color':           GRADE_COLORS.get(grade, '#333'),
+            'current_price':   round(float(actual.iloc[-1]), 2),
+            'next_forecast':   round(next_fc, 2),
+            'trend':           round(trend, 1),
+            'min_historical':  round(float(actual.min()), 2),
+            'max_historical':  round(float(actual.max()), 2),
+            'avg_historical':  round(float(actual.mean()), 2),
+            'best_model':      best_model,
+            'data_points':     int(actual.notna().count()),
         })
-    
+
+    # ── Model comparison table data ─────────────────────────────────────────
+    model_comparison = []
+    for grade in GRADES:
+        if grade not in evaluation_results:
+            continue
+        ev = evaluation_results[grade]
+        row = {'grade': GRADE_LABELS[grade], 'grade_key': grade, 'models': []}
+        for model_name, metrics in ev['metrics'].items():
+            if metrics:
+                row['models'].append({
+                    'name':  model_name,
+                    'mae':   round(metrics['mae'], 2),
+                    'rmse':  round(metrics['rmse'], 2),
+                    'mape':  round(metrics['mape'], 2),
+                    'r2':    round(metrics['r2'], 3) if metrics.get('r2') is not None else '—',
+                    'best':  model_name == ev['best_model'],
+                })
+        model_comparison.append(row)
+
+    # ── Feature importance charts ───────────────────────────────────────────
+    feature_charts = {}
+    for grade in GRADES:
+        if grade not in evaluation_results:
+            continue
+        imps = evaluation_results[grade].get('feature_importances')
+        if imps:
+            feature_charts[grade] = get_feature_importance_chart(grade, imps)
+
     context = {
-        'export_dates': json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
-        'grade_datasets': json.dumps(grade_datasets),
-        'combined_datasets': json.dumps(combined_data),  # Now properly included
-        'grades': grades,
-        'summary_stats': summary_stats,
+        'export_dates':      json.dumps(list(merged['date'].dt.strftime('%Y-%m-%d'))),
+        'grade_datasets':    json.dumps(grade_datasets),
+        'grades':            GRADES,
+        'grade_labels':      GRADE_LABELS,
+        'grade_colors':      GRADE_COLORS,
+        'summary_stats':     summary_stats,
         'total_data_points': len(export_data),
-        'forecast_months': 12,
-        'package_months': json.dumps(package_months),
-        'package_datasets': json.dumps(package_datasets),
-        'evaluation_results': evaluation_results
+        'forecast_months':   12,
+        'evaluation_results': evaluation_results,
+        'model_comparison':  model_comparison,
+        'feature_charts':    feature_charts,
     }
-    
+
     return render(request, 'analytics/dashboard.html', context)
-
-def api_forecast_single_grade(request, grade):
-    """API endpoint to get forecast for a single grade."""
-    if grade not in ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2']:
-        return JsonResponse({'error': 'Invalid grade'}, status=400)
-    
-    # Convert URL-safe grade name back
-    grade_name = grade.replace('_', ' ').replace('FNGS 1 2', 'FNGS 1/2').replace('DUST 1 2', 'DUST 1/2')
-    
-    export_data = load_historical_data()
-    forecasts = forecast_prices(export_data, periods=6)  # 6-month forecast for API
-    
-    merged = pd.merge(export_data, forecasts, on='date', how='outer').sort_values('date')
-    
-    forecast_col = f'forecast_{grade_name}'
-    if forecast_col not in merged.columns:
-        return JsonResponse({'error': 'Forecast not available'}, status=404)
-    
-    # Prepare response data
-    response_data = {
-        'grade': grade_name,
-        'historical': [],
-        'forecast': []
-    }
-    
-    for _, row in merged.iterrows():
-        date_str = row['date'].strftime('%Y-%m-%d')
-        
-        if not pd.isna(row[grade_name]):
-            response_data['historical'].append({
-                'date': date_str,
-                'price': round(row[grade_name], 2)
-            })
-        
-        if not pd.isna(row[forecast_col]):
-            response_data['forecast'].append({
-                'date': date_str,
-                'price': round(max(row[forecast_col], 50), 2)  # Ensure minimum
-            })
-    
-    return JsonResponse(response_data)
-

@@ -1,385 +1,564 @@
+"""
+rfutils.py – ChaiIntel forecasting engine
+==========================================
+Implements and compares four models per tea grade:
+  1. Naïve (last-value carry-forward)       – academic baseline
+  2. Linear Regression with time features   – interpretable benchmark
+  3. SARIMAX                                – industry-standard time-series
+  4. Random Forest                          – ensemble ML model
+
+Cross-validation uses time-series walk-forward splits (no data leakage).
+Metrics: MAE, RMSE, MAPE, R².
+"""
+
+import os
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import RandomForestRegressor
-from sklearn.preprocessing import MinMaxScaler
 import logging
-from datetime import datetime
-from sklearn.model_selection import TimeSeriesSplit
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import matplotlib.pyplot as plt
 import io
 import base64
+import warnings
 
-# Suppress unnecessary warnings
-logging.getLogger('prophet').setLevel(logging.WARNING)
+from datetime import datetime
+from sklearn.ensemble import RandomForestRegressor
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from sklearn.model_selection import TimeSeriesSplit
 
-# --- Historical Data Loader ---
+try:
+    from statsmodels.tsa.statespace.sarimax import SARIMAX
+    SARIMAX_AVAILABLE = True
+except ImportError:
+    SARIMAX_AVAILABLE = False
+
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+
+warnings.filterwarnings('ignore')
+logging.getLogger('statsmodels').setLevel(logging.WARNING)
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+GRADES = ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2']
+GRADE_LABELS = {
+    'BP1': 'BP1',
+    'PF1': 'PF1',
+    'DUST1': 'DUST1',
+    'FNGS_1_2': 'FNGS 1/2',
+    'DUST_1_2': 'DUST 1/2',
+}
+DATA_PATH = os.path.join(os.path.dirname(__file__), 'data', 'tea_auction_data.csv')
+
+# ---------------------------------------------------------------------------
+# Data loading
+# ---------------------------------------------------------------------------
+
 def load_historical_data():
-    """Load historical tea auction data and ensure it's sorted chronologically."""
-    data = {
-        'Month': ['May-22', 'Jun-24', 'May-24', 'Aug-24', 'Dec-24', 'Jan-25', 'Apr-25', 'May-25','Jun-25', 'Jul-25'],
-        'Auction_No': ['2022/20', '2024/26', '2024/22', '2024/35', '2024/51', '2025/01', '2025/16', '2025/21', '2025/23','2025/29'],
-        'BP1': [265, 256, 259, 287, 268, 277, 201, 176, 246, 216],
-        'PF1': [260, 280, 280, 291, 277, 281, 239, 228, 256, 245],
-        'DUST1': [269, 272, 276, 284, 258, 255, 250, 229, 268, 264],
-        'FNGS 1/2': [150, 132, 130, 129, 129, 151, 140, 126, 141, 127],
-        'DUST 1/2': [177, 148, 162, 149, 144, 144, 134, 126, 131, 130],
+    """
+    Load tea auction data from CSV.
+    Columns: date, auction_no, BP1, PF1, DUST1, FNGS_1_2, DUST_1_2
+    Returns a DataFrame sorted by date with internal grade column names.
+
+    Handles both DD/MM/YYYY and YYYY-MM-DD date formats automatically.
+    Aggregates multiple auctions in the same calendar month by taking
+    the mean price so the model always receives one row per month.
+    """
+    df = pd.read_csv(DATA_PATH)
+
+    # Robust date parsing: handles DD/MM/YYYY and YYYY-MM-DD
+    df['date'] = pd.to_datetime(df['date'], dayfirst=True, errors='coerce')
+
+    # Drop rows where date could not be parsed
+    df = df.dropna(subset=['date'])
+
+    # Snap all dates to month-start so grouping works correctly
+    df['date'] = df['date'].values.astype('datetime64[M]').astype('datetime64[ns]')
+
+    # Aggregate: if multiple auctions fall in the same month, take the mean
+    grade_cols = [c for c in GRADES if c in df.columns]
+    df = df.groupby('date')[grade_cols].mean().reset_index()
+
+    df = df.sort_values('date').reset_index(drop=True)
+    return df
+
+
+def get_grade_display_name(grade):
+    return GRADE_LABELS.get(grade, grade)
+
+# ---------------------------------------------------------------------------
+# Feature engineering
+# ---------------------------------------------------------------------------
+
+def create_features(df, grade, lag_periods=None):
+    """
+    Build a feature matrix for time-series regression.
+    Features:
+      - time index (global trend)
+      - month (seasonality proxy)
+      - quarter
+      - lag_1, lag_2, lag_3  (autoregressive)
+      - rolling_mean_3        (local trend smoothing)
+    """
+    if lag_periods is None:
+        lag_periods = [1, 2, 3]
+
+    out = df[['date', grade]].copy()
+    out['time_idx'] = np.arange(len(out))
+    out['month'] = out['date'].dt.month
+    out['quarter'] = out['date'].dt.quarter
+    out['month_sin'] = np.sin(2 * np.pi * out['month'] / 12)
+    out['month_cos'] = np.cos(2 * np.pi * out['month'] / 12)
+
+    for lag in lag_periods:
+        out[f'lag_{lag}'] = out[grade].shift(lag)
+
+    n_roll = min(3, len(df) // 2)
+    if n_roll >= 2:
+        out['rolling_mean'] = out[grade].rolling(n_roll).mean().shift(1)
+    else:
+        out['rolling_mean'] = out[grade].shift(1)
+
+    out = out.dropna().reset_index(drop=True)
+    return out
+
+
+def feature_cols(df, grade):
+    return [c for c in df.columns if c not in ['date', grade]]
+
+# ---------------------------------------------------------------------------
+# Model 1 – Naïve baseline
+# ---------------------------------------------------------------------------
+
+def naive_forecast(df, grade, periods=12):
+    """Carry the last observed value forward (random-walk baseline)."""
+    last_val = df[grade].iloc[-1]
+    last_date = pd.Timestamp(df['date'].iloc[-1])   # ensure Timestamp, not str
+    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
+                                 periods=periods, freq='MS')
+    hist = pd.DataFrame({'date': df['date'], f'forecast_{grade}': df[grade]})
+    fut  = pd.DataFrame({'date': future_dates,
+                         f'forecast_{grade}': [last_val] * periods})
+    return pd.concat([hist, fut], ignore_index=True)
+
+
+def naive_cv_metrics(df, grade, n_splits=3):
+    prices = df[grade].values
+    n = len(prices)
+    n_splits = min(n_splits, n - 2)
+    if n_splits < 1:
+        return None
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    maes, rmses, mapes = [], [], []
+    for train_idx, test_idx in tscv.split(prices):
+        y_test = prices[test_idx]
+        y_pred = np.full_like(y_test, fill_value=prices[train_idx[-1]], dtype=float)
+        maes.append(mean_absolute_error(y_test, y_pred))
+        rmses.append(np.sqrt(mean_squared_error(y_test, y_pred)))
+        mapes.append(np.mean(np.abs((y_test - y_pred) / y_test)) * 100)
+
+    return {
+        'model': 'Naïve',
+        'mae': float(np.mean(maes)),
+        'rmse': float(np.mean(rmses)),
+        'mape': float(np.mean(mapes)),
+        'r2': None,
     }
-    
-    df = pd.DataFrame(data)
-    df['date'] = pd.to_datetime(df['Month'], format='%b-%y')
-    
-    # Sort by date
-    df = df[['date', 'BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']].sort_values('date')
-    return df
 
-def calculate_price_bounds(historical_prices):
-    """Calculate reasonable price bounds based on historical data."""
-    mean_price = np.mean(historical_prices)
-    std_price = np.std(historical_prices)
-    min_price = np.min(historical_prices)
-    
-    # Set floor as 60% of historical minimum or mean - 2*std, whichever is higher
-    floor_price = max(min_price * 0.6, mean_price - 2 * std_price, 50)  # Absolute minimum of 50
-    
-    # Set ceiling as 150% of historical maximum
-    ceiling_price = np.max(historical_prices) * 1.5
-    
-    return floor_price, ceiling_price
+# ---------------------------------------------------------------------------
+# Model 2 – Linear Regression
+# ---------------------------------------------------------------------------
 
-def enhance_data_with_smoothing(df, grade):
-    """Apply exponential smoothing to reduce volatility in limited data."""
-    prices = df[grade].dropna()
-    if len(prices) < 3:
-        return df
-    
-    # Apply exponential smoothing with alpha=0.3 for moderate smoothing
-    smoothed = prices.ewm(alpha=0.3).mean()
-    
-    # Create enhanced dataset with both original and smoothed values
-    enhanced_df = df.copy()
-    enhanced_df[f'{grade}_smoothed'] = smoothed
-    
-    return enhanced_df
+def linear_forecast(df, grade, periods=12):
+    feat_df = create_features(df, grade)
+    if len(feat_df) < 4:
+        return naive_forecast(df, grade, periods)
 
-def create_time_features(df):
-    """Create time-based features for Random Forest."""
-    df = df.copy()
-    df['time'] = np.arange(len(df))
-    df['month'] = df['date'].dt.month
-    df['quarter'] = df['date'].dt.quarter
-    return df
+    X = feat_df[feature_cols(feat_df, grade)].values
+    y = feat_df[grade].values
+    model = LinearRegression()
+    model.fit(X, y)
 
-def forecast_with_random_forest(historical_df, target_col, periods=12):
-    """
-    Forecast using Random Forest with safeguards against unrealistic predictions.
-    Maintains same interface as Prophet version for easy swapping.
-    """
-    # Calculate bounds first
-    floor_price, ceiling_price = calculate_price_bounds(historical_df[target_col])
-    
-    # Prepare features
-    df = historical_df[['date', target_col]].copy()
-    df = create_time_features(df)
-    
-    # Create lag features (using fewer lags for small dataset)
-    for lag in [1, 2]:  # Reduced from [1, 2, 3] to avoid overfitting
-        df[f'lag_{lag}'] = df[target_col].shift(lag)
-    
-    # Add rolling statistics
-    df['rolling_avg_2'] = df[target_col].rolling(2).mean().shift(1)
-    df = df.dropna()
-    
-    if len(df) < 2:  # Need at least 2 samples to train
-        return create_fallback_forecast(historical_df, target_col, periods)
-    
-    # Prepare data
-    X = df.drop(columns=['date', target_col])
-    y = df[target_col]
-    
-    # Configure Random Forest (simplified for small dataset)
+    last_date = pd.Timestamp(df['date'].iloc[-1])
+    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
+                                 periods=periods, freq='MS')
+
+    # Build future feature rows iteratively
+    all_prices = list(df[grade].values)
+    forecasts = []
+    lags_used = [1, 2, 3]
+
+    for i, fd in enumerate(future_dates):
+        t = len(df) + i
+        month = fd.month
+        quarter = fd.quarter
+        m_sin = np.sin(2 * np.pi * month / 12)
+        m_cos = np.cos(2 * np.pi * month / 12)
+
+        lv = [all_prices[-l] if l <= len(all_prices) else all_prices[0]
+              for l in lags_used]
+        roll = np.mean(all_prices[-3:]) if len(all_prices) >= 3 else all_prices[-1]
+
+        row = np.array([[t, month, quarter, m_sin, m_cos] + lv + [roll]])
+        pred = model.predict(row)[0]
+        pred = float(np.clip(pred, df[grade].min() * 0.7, df[grade].max() * 1.4))
+        forecasts.append(pred)
+        all_prices.append(pred)
+
+    hist = pd.DataFrame({'date': df['date'], f'forecast_{grade}': df[grade]})
+    fut  = pd.DataFrame({'date': future_dates, f'forecast_{grade}': forecasts})
+    return pd.concat([hist, fut], ignore_index=True)
+
+
+def linear_cv_metrics(df, grade, n_splits=3):
+    feat_df = create_features(df, grade)
+    if len(feat_df) < 4:
+        return None
+
+    X = feat_df[feature_cols(feat_df, grade)].values
+    y = feat_df[grade].values
+    n_splits = min(n_splits, len(feat_df) - 2)
+    if n_splits < 1:
+        return None
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    maes, rmses, mapes, r2s = [], [], [], []
+    for train_idx, test_idx in tscv.split(X):
+        model = LinearRegression()
+        model.fit(X[train_idx], y[train_idx])
+        pred = model.predict(X[test_idx])
+        maes.append(mean_absolute_error(y[test_idx], pred))
+        rmses.append(np.sqrt(mean_squared_error(y[test_idx], pred)))
+        mapes.append(np.mean(np.abs((y[test_idx] - pred) / y[test_idx])) * 100)
+        if len(y[test_idx]) > 1:
+            r2s.append(r2_score(y[test_idx], pred))
+
+    return {
+        'model': 'Linear Regression',
+        'mae': float(np.mean(maes)),
+        'rmse': float(np.mean(rmses)),
+        'mape': float(np.mean(mapes)),
+        'r2': float(np.mean(r2s)) if r2s else None,
+    }
+
+# ---------------------------------------------------------------------------
+# Model 3 – SARIMAX
+# ---------------------------------------------------------------------------
+
+def sarimax_forecast(df, grade, periods=12):
+    if not SARIMAX_AVAILABLE or len(df) < 6:
+        return linear_forecast(df, grade, periods)
+
+    try:
+        series = df.set_index('date')[grade].asfreq('MS').fillna(method='ffill')
+        # Simple ARIMA(1,1,1) — justified by small dataset size
+        model = SARIMAX(series, order=(1, 1, 1), trend='c',
+                        enforce_stationarity=False, enforce_invertibility=False)
+        fit = model.fit(disp=False)
+        fcast = fit.forecast(steps=periods)
+
+        last_date = pd.Timestamp(df['date'].iloc[-1])
+        future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
+                                     periods=periods, freq='MS')
+
+        hist = pd.DataFrame({'date': df['date'], f'forecast_{grade}': df[grade]})
+        fut  = pd.DataFrame({'date': future_dates,
+                             f'forecast_{grade}': fcast.values.clip(
+                                 df[grade].min() * 0.7, df[grade].max() * 1.4)})
+        return pd.concat([hist, fut], ignore_index=True)
+    except Exception:
+        return linear_forecast(df, grade, periods)
+
+
+def sarimax_cv_metrics(df, grade, n_splits=3):
+    if not SARIMAX_AVAILABLE or len(df) < 8:
+        return None
+
+    prices = df[grade].values
+    dates  = df['date'].values
+    n_splits = min(n_splits, len(prices) - 4)
+    if n_splits < 1:
+        return None
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    maes, rmses, mapes, r2s = [], [], [], []
+    for train_idx, test_idx in tscv.split(prices):
+        if len(train_idx) < 4:
+            continue
+        try:
+            train_s = pd.Series(prices[train_idx],
+                                index=pd.DatetimeIndex(dates[train_idx]).to_period('M').to_timestamp())
+            model = SARIMAX(train_s, order=(1, 1, 1), trend='c',
+                            enforce_stationarity=False, enforce_invertibility=False)
+            fit   = model.fit(disp=False)
+            pred  = fit.forecast(steps=len(test_idx)).values
+            y_t   = prices[test_idx]
+            maes.append(mean_absolute_error(y_t, pred))
+            rmses.append(np.sqrt(mean_squared_error(y_t, pred)))
+            mapes.append(np.mean(np.abs((y_t - pred) / y_t)) * 100)
+            if len(y_t) > 1:
+                r2s.append(r2_score(y_t, pred))
+        except Exception:
+            continue
+
+    if not maes:
+        return None
+
+    return {
+        'model': 'SARIMAX',
+        'mae': float(np.mean(maes)),
+        'rmse': float(np.mean(rmses)),
+        'mape': float(np.mean(mapes)),
+        'r2': float(np.mean(r2s)) if r2s else None,
+    }
+
+# ---------------------------------------------------------------------------
+# Model 4 – Random Forest
+# ---------------------------------------------------------------------------
+
+def rf_forecast(df, grade, periods=12):
+    feat_df = create_features(df, grade)
+    if len(feat_df) < 4:
+        return naive_forecast(df, grade, periods)
+
+    fcols = feature_cols(feat_df, grade)
+    X = feat_df[fcols].values
+    y = feat_df[grade].values
+
     model = RandomForestRegressor(
-        n_estimators=50,  # Reduced from 100
-        max_depth=3,      # Shallower trees
-        random_state=42,
-        min_samples_leaf=2  # Prevent overfitting
+        n_estimators=100,
+        max_depth=4,
+        min_samples_leaf=2,
+        random_state=42
     )
     model.fit(X, y)
-    
-    # Create future dates
-    last_date = df['date'].max()
-    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), periods=periods, freq='M')
-    
-    # Initialize with last known values
-    last_values = df[target_col].values[-2:]  # Only need last 2 values
-    
-    forecasts = []
-    for i in range(periods):
-        # Prepare future feature vector
-        X_future = pd.DataFrame({
-            'time': [len(df) + i],
-            'month': [(last_date.month + i) % 12 or 12],  # Handle month wrap-around
-            'quarter': [(last_date.month + i - 1) // 3 + 1],
-            'lag_1': [last_values[0] if i == 0 else forecasts[i-1]],
-            'lag_2': [last_values[1] if i == 0 else (last_values[0] if i == 1 else forecasts[i-2])],
-            'rolling_avg_2': [np.mean(last_values)] if i == 0 else [
-                np.mean([forecasts[i-1], (last_values[0] if i == 1 else forecasts[i-2])])
-            ]
-        }, index=[0])
-        
-        # Predict
-        pred = model.predict(X_future)[0]
-        
-        
-        # Apply safeguards
-        pred = np.clip(pred, floor_price, ceiling_price)
-        
-        # Apply trend dampening
-        last_actual = historical_df[target_col].iloc[-1]
-        recent_avg = historical_df[target_col].tail(3).mean()
-        dampening_factor = min(0.5, (i+1)*0.1)  # Increase dampening over time
-        pred = pred * (1 - dampening_factor) + recent_avg * dampening_factor
-        
-        # Final safety check
-        min_viable_price = max(floor_price, last_actual * 0.5)
-        pred = max(pred, min_viable_price)
-        
+
+    last_date = pd.Timestamp(df['date'].iloc[-1])
+    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
+                                 periods=periods, freq='MS')
+
+    all_prices = list(df[grade].values)
+    forecasts  = []
+    lags_used  = [1, 2, 3]
+
+    for i, fd in enumerate(future_dates):
+        t     = len(df) + i
+        month = fd.month
+        quarter = fd.quarter
+        m_sin = np.sin(2 * np.pi * month / 12)
+        m_cos = np.cos(2 * np.pi * month / 12)
+
+        lv   = [all_prices[-l] if l <= len(all_prices) else all_prices[0]
+                for l in lags_used]
+        roll = np.mean(all_prices[-3:]) if len(all_prices) >= 3 else all_prices[-1]
+
+        row  = np.array([[t, month, quarter, m_sin, m_cos] + lv + [roll]])
+        pred = model.predict(row)[0]
+        # Trend dampening: pull toward recent mean over time
+        recent_avg = np.mean(all_prices[-3:])
+        damp = min(0.5, (i + 1) * 0.08)
+        pred = pred * (1 - damp) + recent_avg * damp
+        pred = float(np.clip(pred, df[grade].min() * 0.7, df[grade].max() * 1.4))
         forecasts.append(pred)
-    
-    # Combine historical and forecast data
-    all_dates = list(historical_df['date']) + list(future_dates)
-    all_values = list(historical_df[target_col]) + forecasts
-    
-    return pd.DataFrame({
-        'date': all_dates,
-        f'forecast_{target_col}': all_values
-    })
+        all_prices.append(pred)
 
-def create_fallback_forecast(df, grade, periods):
-    """
-    Fallback forecasting method using simple trend analysis.
-    (Unchanged from original implementation)
-    """
-    prices = df[grade].dropna()
-    dates = df.loc[df[grade].notna(), 'date']
-    
-    if len(prices) == 0:
-        # If no data, use market average
-        base_price = 200
-    elif len(prices) == 1:
-        base_price = prices.iloc[0]
-    else:
-        # Calculate simple trend
-        base_price = prices.iloc[-1]
-        if len(prices) >= 2:
-            trend = (prices.iloc[-1] - prices.iloc[0]) / len(prices)
-            # Dampen extreme trends
-            trend = np.clip(trend, -5, 5)
-        else:
-            trend = 0
-    
-    # Generate future dates
-    last_date = df['date'].max()
-    future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1), periods=periods, freq='M')
-    
-    # Create conservative forecast
-    forecast_prices = []
-    for i, future_date in enumerate(future_dates):
-        # Apply dampened trend with noise reduction
-        forecast_price = base_price + (trend * (i + 1) * 0.5)  # Reduce trend impact
-        
-        # Add small random variation but keep it conservative
-        variation = np.random.normal(0, base_price * 0.02)  # 2% variation
-        forecast_price += variation
-        
-        # Ensure minimum price
-        forecast_price = max(forecast_price, base_price * 0.7, 50)
-        forecast_prices.append(forecast_price)
-    
-    # Combine historical and forecast data
-    all_dates = list(df['date']) + list(future_dates)
-    all_forecasts = [None] * len(df) + forecast_prices
-    
-    return pd.DataFrame({
-        'date': all_dates,
-        f'forecast_{grade}': all_forecasts
-    })
+    hist = pd.DataFrame({'date': df['date'], f'forecast_{grade}': df[grade]})
+    fut  = pd.DataFrame({'date': future_dates, f'forecast_{grade}': forecasts})
+    return pd.concat([hist, fut], ignore_index=True)
 
-def add_confidence_intervals(df, forecasts):
+
+def rf_cv_metrics(df, grade, n_splits=3):
+    feat_df = create_features(df, grade)
+    if len(feat_df) < 4:
+        return None
+
+    fcols  = feature_cols(feat_df, grade)
+    X = feat_df[fcols].values
+    y = feat_df[grade].values
+    n_splits = min(n_splits, len(feat_df) - 2)
+    if n_splits < 1:
+        return None
+
+    tscv = TimeSeriesSplit(n_splits=n_splits)
+    maes, rmses, mapes, r2s = [], [], [], []
+    all_actuals, all_preds = [], []
+
+    for train_idx, test_idx in tscv.split(X):
+        model = RandomForestRegressor(n_estimators=100, max_depth=4,
+                                      min_samples_leaf=2, random_state=42)
+        model.fit(X[train_idx], y[train_idx])
+        pred = model.predict(X[test_idx])
+        maes.append(mean_absolute_error(y[test_idx], pred))
+        rmses.append(np.sqrt(mean_squared_error(y[test_idx], pred)))
+        mapes.append(np.mean(np.abs((y[test_idx] - pred) / y[test_idx])) * 100)
+        if len(y[test_idx]) > 1:
+            r2s.append(r2_score(y[test_idx], pred))
+        all_actuals.extend(y[test_idx])
+        all_preds.extend(pred)
+
+    # Feature importance (train on full dataset)
+    full_model = RandomForestRegressor(n_estimators=100, max_depth=4,
+                                       min_samples_leaf=2, random_state=42)
+    full_model.fit(X, y)
+    importances = dict(zip(fcols, full_model.feature_importances_.tolist()))
+
+    return {
+        'model': 'Random Forest',
+        'mae': float(np.mean(maes)),
+        'rmse': float(np.mean(rmses)),
+        'mape': float(np.mean(mapes)),
+        'r2': float(np.mean(r2s)) if r2s else None,
+        'feature_importances': importances,
+        'actuals': [float(v) for v in all_actuals],
+        'preds':   [float(v) for v in all_preds],
+    }
+
+# ---------------------------------------------------------------------------
+# Confidence intervals (prediction interval via historical residuals)
+# ---------------------------------------------------------------------------
+
+def add_confidence_intervals(df, forecasts, grade):
     """
-    Add confidence intervals to provide uncertainty estimates.
-    (Unchanged from original implementation)
+    Approximate 80% prediction interval using historical price std.
+    Note: these are heuristic bounds, not rigorous statistical intervals.
     """
-    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
-    
-    for grade in grades:
-        if f'forecast_{grade}' in forecasts.columns:
-            forecast_col = f'forecast_{grade}'
-            # Calculate confidence intervals based on historical volatility
-            historical_prices = df[grade].dropna()
-            
-            if len(historical_prices) > 1:
-                volatility = historical_prices.std()
-                
-                # Add confidence intervals
-                forecasts[f'{forecast_col}_lower'] = forecasts[forecast_col] - (1.96 * volatility * 0.5)
-                forecasts[f'{forecast_col}_upper'] = forecasts[forecast_col] + (1.96 * volatility * 0.5)
-                
-                # Ensure lower bound is never negative
-                forecasts[f'{forecast_col}_lower'] = forecasts[f'{forecast_col}_lower'].clip(lower=50)
-    
+    fc_col = f'forecast_{grade}'
+    if fc_col not in forecasts.columns:
+        return forecasts
+
+    historical_std = df[grade].std()
+    z = 1.28  # ~80% coverage
+
+    forecasts[f'{fc_col}_lower'] = (
+        forecasts[fc_col] - z * historical_std).clip(lower=df[grade].min() * 0.6)
+    forecasts[f'{fc_col}_upper'] = forecasts[fc_col] + z * historical_std
     return forecasts
 
-def forecast_prices_robust(df, periods=12):
+# ---------------------------------------------------------------------------
+# Best-model selection
+# ---------------------------------------------------------------------------
+
+def select_best_model(grade_metrics):
     """
-    Main forecasting function using Random Forest.
-    Maintains same interface as original Prophet version.
+    Pick the model with lowest MAPE. Falls back to RF if metrics missing.
+    Returns the model name string.
     """
-    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
-    forecasts = pd.DataFrame()
-    
-    for grade in grades:
-        try:
-            # Use Random Forest forecasting
-            forecast = forecast_with_random_forest(df, grade, periods)
-            
-            # Merge forecasts
-            if forecasts.empty:
-                forecasts = forecast
-            else:
-                forecasts = pd.merge(forecasts, forecast, on='date', how='outer')
-                
-        except Exception as e:
-            print(f"Error forecasting {grade}: {e}")
-            # Use fallback method
-            forecast = create_fallback_forecast(df, grade, periods)
-            if forecasts.empty:
-                forecasts = forecast
-            else:
-                forecasts = pd.merge(forecasts, forecast, on='date', how='outer')
-    
-    return forecasts
+    candidates = {k: v for k, v in grade_metrics.items() if v and v.get('mape') is not None}
+    if not candidates:
+        return 'Random Forest'
+    return min(candidates, key=lambda k: candidates[k]['mape'])
+
+
+# ---------------------------------------------------------------------------
+# Main public API
+# ---------------------------------------------------------------------------
 
 def forecast_prices(df=None, periods=12, evaluate=False):
     """
-    Wrapper function that combines forecasting with confidence intervals.
-    (Unchanged from original implementation)
+    Main entry point called by views.py.
+
+    Returns:
+      - If evaluate=True: dict of evaluation results per grade
+      - Otherwise: merged DataFrame with forecast columns for each grade
     """
     if df is None:
         df = load_historical_data()
-    
+
     if evaluate:
         return get_model_evaluation(df)
-    # Use the robust forecasting method
-    forecasts = forecast_prices_robust(df, periods)
-    
-    # Add confidence intervals
-    forecasts = add_confidence_intervals(df, forecasts)
-    
+
+    forecasts = pd.DataFrame()
+    for grade in GRADES:
+        if grade not in df.columns:
+            continue
+        try:
+            fc = rf_forecast(df, grade, periods)
+            fc = add_confidence_intervals(df, fc, grade)
+        except Exception as e:
+            print(f"Forecast error for {grade}: {e}")
+            fc = naive_forecast(df, grade, periods)
+
+        forecasts = fc if forecasts.empty else pd.merge(forecasts, fc, on='date', how='outer')
+
     return forecasts
 
-# Add these new functions to rfutils.py
-def evaluate_model_performance(df, grade, plot=True):
-    """
-    Evaluate Random Forest model performance for a specific grade
-    Returns evaluation metrics and optionally a plot image
-    """
-    # Prepare features
-    temp_df = df[['date', grade]].copy()
-    temp_df = create_time_features(temp_df)
-    
-    # Create lag features
-    for lag in [1, 2]:
-        temp_df[f'lag_{lag}'] = temp_df[grade].shift(lag)
-    temp_df['rolling_avg_2'] = temp_df[grade].rolling(2).mean().shift(1)
-    temp_df = temp_df.dropna()
-    
-    if len(temp_df) < 3:
-        return None  # Not enough data for proper evaluation
-    
-    # Time-series cross-validation
-    tscv = TimeSeriesSplit(n_splits=min(3, len(temp_df)-2))
-    metrics = {'mae': [], 'rmse': [], 'mape': []}
-    actuals, preds, dates = [], [], []
-    
-    for train_idx, test_idx in tscv.split(temp_df):
-        train = temp_df.iloc[train_idx]
-        test = temp_df.iloc[test_idx]
-        
-        X_train = train.drop(columns=['date', grade])
-        y_train = train[grade]
-        X_test = test.drop(columns=['date', grade])
-        y_test = test[grade]
-        
-        model = RandomForestRegressor(n_estimators=50, max_depth=3, random_state=42)
-        model.fit(X_train, y_train)
-        pred = model.predict(X_test)
-        
-        # Store results
-        actuals.extend(y_test)
-        preds.extend(pred)
-        dates.extend(test['date'])
-        
-        # Calculate metrics
-        metrics['mae'].append(mean_absolute_error(y_test, pred))
-        metrics['rmse'].append(np.sqrt(mean_squared_error(y_test, pred)))
-        metrics['mape'].append(np.mean(np.abs((y_test - pred) / y_test)) * 100)
-    
-    # Aggregate metrics
-    results = {
-        'grade': grade,
-        'mae': np.mean(metrics['mae']),
-        'rmse': np.mean(metrics['rmse']),
-        'mape': np.mean(metrics['mape']),
-        'last_actual': actuals[-1],
-        'last_pred': preds[-1],
-        'error_pct': abs(actuals[-1] - preds[-1]) / actuals[-1] * 100
-    }
-    
-    if plot:
-        plot_url = generate_evaluation_plot(dates, actuals, preds, grade)
-        results['plot_url'] = plot_url
-    
-    return results
-
-def generate_evaluation_plot(dates, actuals, preds, grade):
-    """Generate base64 encoded plot for HTML embedding"""
-    plt.figure(figsize=(10, 4))
-    plt.plot(dates, actuals, 'o-', label='Actual')
-    plt.plot(dates, preds, 'x--', label='Predicted')
-    plt.title(f'{grade} Model Evaluation')
-    plt.ylabel('Price')
-    plt.legend()
-    plt.grid(True)
-    plt.xticks(rotation=45)
-    
-    # Save to buffer
-    buffer = io.BytesIO()
-    plt.savefig(buffer, format='png', bbox_inches='tight')
-    plt.close()
-    buffer.seek(0)
-    
-    # Encode as base64
-    plot_data = base64.b64encode(buffer.read()).decode('utf-8')
-    return f"data:image/png;base64,{plot_data}"
 
 def get_model_evaluation(df=None):
     """
-    Evaluate all models and return results
-    Compatible with Django view (returns dict of results)
+    Run all four models across all grades and return comparison metrics.
     """
     if df is None:
         df = load_historical_data()
-    
-    evaluation_results = {}
-    grades = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
-    
-    for grade in grades:
-        try:
-            evaluation_results[grade] = evaluate_model_performance(df, grade)
-        except Exception as e:
-            print(f"Error evaluating {grade}: {e}")
-            evaluation_results[grade] = None
-    
-    return evaluation_results
 
+    results = {}
+    for grade in GRADES:
+        if grade not in df.columns:
+            continue
+
+        naive_m  = naive_cv_metrics(df, grade)
+        linear_m = linear_cv_metrics(df, grade)
+        sarimx_m = sarimax_cv_metrics(df, grade)
+        rf_m     = rf_cv_metrics(df, grade)
+
+        grade_metrics = {
+            'Naïve':             naive_m,
+            'Linear Regression': linear_m,
+            'SARIMAX':           sarimx_m,
+            'Random Forest':     rf_m,
+        }
+        best = select_best_model(grade_metrics)
+
+        results[grade] = {
+            'display_name': get_grade_display_name(grade),
+            'metrics': grade_metrics,
+            'best_model': best,
+            'feature_importances': rf_m.get('feature_importances') if rf_m else None,
+            'data_points': int(df[grade].notna().sum()),
+        }
+
+    return results
+
+
+def get_feature_importance_chart(grade, importances):
+    """
+    Generate a base64 PNG bar chart of Random Forest feature importances.
+    """
+    if not importances:
+        return None
+
+    labels = list(importances.keys())
+    values = list(importances.values())
+    sorted_pairs = sorted(zip(values, labels), reverse=True)
+    values, labels = zip(*sorted_pairs)
+
+    friendly = {
+        'lag_1': 'Lag 1 month', 'lag_2': 'Lag 2 months', 'lag_3': 'Lag 3 months',
+        'rolling_mean': 'Rolling avg (3m)', 'month': 'Month',
+        'quarter': 'Quarter', 'time_idx': 'Time trend',
+        'month_sin': 'Seasonality (sin)', 'month_cos': 'Seasonality (cos)',
+    }
+    labels = [friendly.get(l, l) for l in labels]
+
+    fig, ax = plt.subplots(figsize=(6, 3))
+    colors = ['#2D6A4F' if v == max(values) else '#74C69D' for v in values]
+    bars = ax.barh(labels, values, color=colors, edgecolor='none', height=0.6)
+    ax.set_xlabel('Importance', fontsize=9)
+    ax.set_title(f'{get_grade_display_name(grade)} – Feature Importance', fontsize=10, fontweight='bold')
+    ax.tick_params(labelsize=8)
+    ax.spines['top'].set_visible(False)
+    ax.spines['right'].set_visible(False)
+    ax.invert_yaxis()
+
+    for bar, val in zip(bars, values):
+        ax.text(val + 0.002, bar.get_y() + bar.get_height() / 2,
+                f'{val:.3f}', va='center', fontsize=8)
+
+    plt.tight_layout()
+    buf = io.BytesIO()
+    plt.savefig(buf, format='png', dpi=120, bbox_inches='tight')
+    plt.close()
+    buf.seek(0)
+    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode()}"
