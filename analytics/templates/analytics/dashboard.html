@@ -1,208 +1,490 @@
 {% extends 'analytics/base.html' %}
+{% load static %}
 {% block title %}Dashboard | ChaiIntel{% endblock %}
 
 {% block content %}
 
-{# ── Summary metric cards ────────────────────────────────── #}
-<div class="section-heading animate-in">
-  <h2>Price Overview</h2>
-  <p>Current auction prices &amp; next-month forecasts · {{ total_data_points }} data points</p>
+{# ── Section heading ───────────────────────────────────────────────── #}
+<div class="mb-6 flex items-end justify-between">
+  <div>
+    <h2 class="text-title-sm font-semibold text-gray-900 dark:text-white/90">Price Overview</h2>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+      Current auction prices &amp; next-month forecasts · {{ total_data_points }} data points
+    </p>
+  </div>
 </div>
-
-<div class="metric-grid">
+{# ── Chosen-model banner ────────────────────────────────── #}
+<div class="mb-6 flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-brand-200 bg-brand-50/60 px-5 py-4 dark:border-brand-500/30 dark:bg-brand-500/10">
+  <div class="flex items-center gap-3">
+    <span class="flex h-10 w-10 items-center justify-center rounded-xl bg-brand-500 text-white">
+      <i class="fas fa-cube"></i>
+    </span>
+    <div>
+      <div class="text-xs font-semibold uppercase tracking-[0.08em] text-brand-700 dark:text-brand-300">
+        Active forecasting model
+      </div>
+      <div class="text-lg font-semibold text-gray-900 dark:text-white/90">
+        {{ chosen_model }}
+        <span class="ml-2 text-xs font-normal text-gray-500 dark:text-gray-400">— used for every tea grade</span>
+      </div>
+    </div>
+  </div>
+  <div class="flex flex-wrap items-center gap-4 text-xs text-gray-600 dark:text-gray-300">
+    {% if selection_stats.mean_rank %}
+    <div class="flex flex-col">
+      <span class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Mean rank</span>
+      <strong class="text-sm text-gray-900 dark:text-white/90">{{ selection_stats.mean_rank }} / 4</strong>
+    </div>
+    {% endif %}
+    {% if selection_stats.mean_mape %}
+    <div class="flex flex-col">
+      <span class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Mean MAPE</span>
+      <strong class="text-sm text-gray-900 dark:text-white/90">{{ selection_stats.mean_mape }}%</strong>
+    </div>
+    {% endif %}
+    {% if validation_summary.beats_naive_count is not None %}
+    <div class="flex flex-col">
+      <span class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Beats naïve</span>
+      <strong class="text-sm text-gray-900 dark:text-white/90">
+        {{ validation_summary.beats_naive_count }} / {{ validation_summary.grades_evaluated }} grades
+      </strong>
+    </div>
+    {% endif %}
+    <button onclick="document.querySelector('[data-tab=models]')?.click(); window.scrollTo({top: document.querySelector('#tab-anchor')?.offsetTop ?? 0, behavior: 'smooth'})"
+            class="inline-flex items-center gap-1 text-xs font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400">
+      See justification <i class="fas fa-arrow-right text-[10px]"></i>
+    </button>
+    <a href="{% static 'analytics/docs/model-justification.md' %}" download
+       class="inline-flex items-center gap-1.5 rounded-lg border border-brand-300 bg-white px-3 py-1.5 text-xs font-semibold text-brand-700 transition hover:bg-brand-50 dark:border-brand-500/40 dark:bg-white/[0.03] dark:text-brand-300 dark:hover:bg-white/[0.06]">
+      <i class="fas fa-file-arrow-down text-[10px]"></i>
+      Download write-up
+    </a>
+  </div>
+</div>
+{# ── Summary metric cards ──────────────────────────────────────────── #}
+<div class="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5">
   {% for stat in summary_stats %}
-  <div class="metric-card animate-in">
-    <div class="metric-accent" style="background:{{ stat.color }}"></div>
-    <div class="metric-label">{{ stat.grade }}</div>
-    <div class="metric-price">{{ stat.current_price }}<span class="metric-unit"> ¢/kg</span></div>
-    <div class="metric-footer">
-      <span>
-        {% if stat.trend >= 0 %}
-          <span class="trend-up"><i class="fas fa-arrow-up" style="font-size:10px"></i> +{{ stat.trend }}%</span>
-        {% else %}
-          <span class="trend-down"><i class="fas fa-arrow-down" style="font-size:10px"></i> {{ stat.trend }}%</span>
-        {% endif %}
-        MoM
+  <div class="rounded-2xl border border-gray-200 bg-white p-5 shadow-theme-xs transition hover:shadow-theme-md dark:border-gray-800 dark:bg-white/[0.03]">
+    <div class="flex items-center justify-between">
+      <span class="text-xs font-semibold uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">
+        {{ stat.grade }}
       </span>
-      <span style="color:var(--muted);">→ <strong style="color:var(--ink)">{{ stat.next_forecast }}</strong></span>
+      <span class="h-2 w-2 rounded-full" style="background:{{ stat.color }}"></span>
+    </div>
+    <div class="mt-3 flex items-baseline gap-1">
+      <span class="text-2xl font-semibold text-gray-900 dark:text-white/90">{{ stat.current_price }}</span>
+      <span class="text-xs text-gray-500 dark:text-gray-400">¢/kg</span>
+    </div>
+    <div class="mt-3 flex items-center justify-between border-t border-gray-100 pt-3 text-xs dark:border-gray-800">
+      <span class="inline-flex items-center gap-1 font-medium
+                   {% if stat.trend >= 0 %}text-success-600 dark:text-success-400{% else %}text-error-600 dark:text-error-400{% endif %}">
+        {% if stat.trend >= 0 %}
+          <i class="fas fa-arrow-up text-[9px]"></i>+{{ stat.trend }}%
+        {% else %}
+          <i class="fas fa-arrow-down text-[9px]"></i>{{ stat.trend }}%
+        {% endif %}
+        <span class="text-gray-400 dark:text-gray-500">MoM</span>
+      </span>
+      <span class="text-gray-500 dark:text-gray-400">
+        → <strong class="text-gray-900 dark:text-white/90">{{ stat.next_forecast }}</strong>
+      </span>
     </div>
   </div>
   {% endfor %}
 </div>
 
-{# ── Main chart ──────────────────────────────────────────── #}
-<div class="card animate-in" style="margin-bottom:28px">
-  <div class="card-header">
-    <span class="card-title"><i class="fas fa-chart-line"></i> All Grades — Price History &amp; Forecast</span>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-ghost" id="btn-toggle-forecast" onclick="toggleForecastLines()" style="font-size:12px;padding:5px 12px;">
-        <i class="fas fa-eye"></i> Forecast
+{# ── Main combined chart ──────────────────────────────────────────── #}
+<div class="mb-6 rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+    <div class="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white/90">
+      <i class="fas fa-chart-line text-brand-500"></i>
+      All Grades — Price History &amp; Forecast
+    </div>
+    <div class="flex flex-wrap items-center gap-2">
+      <button id="btn-toggle-forecast" onclick="toggleForecastLines()"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+        <i class="fas fa-eye text-[10px]"></i> Forecast
       </button>
-      <button class="btn btn-ghost" id="btn-toggle-ci" onclick="toggleCI()" style="font-size:12px;padding:5px 12px;">
-        <i class="fas fa-adjust"></i> Uncertainty
+      <button id="btn-toggle-ci" onclick="toggleCI()"
+              class="inline-flex items-center gap-1.5 rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs font-medium text-gray-600 transition hover:bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]">
+        <i class="fas fa-adjust text-[10px]"></i> Uncertainty
       </button>
-      <button class="btn btn-ghost" onclick="downloadChart('combined')" style="font-size:12px;padding:5px 12px;">
+      <button onclick="downloadChart('combined')"
+              class="inline-flex h-8 w-8 items-center justify-center rounded-lg border border-gray-200 bg-white text-xs text-gray-600 transition hover:bg-gray-50 dark:border-gray-800 dark:bg-white/[0.03] dark:text-gray-300 dark:hover:bg-white/[0.06]"
+              aria-label="Download chart">
         <i class="fas fa-download"></i>
       </button>
     </div>
   </div>
-  <div class="card-body">
-    <div class="chart-wrap" style="height:380px">
+  <div class="p-5">
+    <div class="relative h-[380px]">
       <canvas id="chart-combined"></canvas>
     </div>
-    <div class="forecast-note">
-      <i class="fas fa-info-circle" style="margin-top:1px;flex-shrink:0"></i>
-      <span>Dashed lines show 12-month Random Forest forecasts. Shaded bands are heuristic 80% uncertainty bounds
-      based on historical price volatility — not formal prediction intervals.</span>
+    <div class="mt-4 flex items-start gap-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-2.5 text-xs text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300">
+      <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
+      <span>Dashed lines show 12-month Random Forest forecasts. Shaded bands are heuristic 80% uncertainty bounds based on historical price volatility — not formal prediction intervals.</span>
     </div>
   </div>
 </div>
 
-{# ── Tabs: Per-grade charts | Model comparison | Feature importance ── #}
-<div class="card animate-in" style="margin-bottom:28px">
-  <div class="card-body" style="padding-top:18px">
+{# ── Tabbed card: Forecasts | Models | Features ──────────────────── #}
+<div id="tab-anchor" class="mb-6 rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]"
+     x-data="{ tab: 'charts' }">
 
-    <div class="tab-group">
-      <button class="tab-btn active" onclick="switchTab('charts')">Price Forecasts</button>
-      <button class="tab-btn" onclick="switchTab('models')">Model Comparison</button>
-      <button class="tab-btn" onclick="switchTab('features')">Feature Importance</button>
+  <div class="border-b border-gray-100 px-5 pt-2 dark:border-gray-800" role="tablist">
+    <div class="flex gap-1 overflow-x-auto">
+      <button role="tab" data-tab="charts" :aria-selected="tab === 'charts'" @click="tab = 'charts'"
+              :class="tab === 'charts' ? 'border-brand-500 text-brand-500' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+              class="border-b-2 px-4 py-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-300 focus:ring-offset-1">
+        Price Forecasts
+      </button>
+      <button role="tab" data-tab="models" :aria-selected="tab === 'models'" @click="tab = 'models'"
+              :class="tab === 'models' ? 'border-brand-500 text-brand-500' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+              class="border-b-2 px-4 py-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-300 focus:ring-offset-1">
+        Model Comparison
+      </button>
+      <button role="tab" data-tab="validation" :aria-selected="tab === 'validation'" @click="tab = 'validation'; queueValidationCharts()"
+              :class="tab === 'validation' ? 'border-brand-500 text-brand-500' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+              class="border-b-2 px-4 py-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-300 focus:ring-offset-1">
+        Validation
+      </button>
+      {% if feature_charts %}
+      <button role="tab" data-tab="features" :aria-selected="tab === 'features'" @click="tab = 'features'"
+              :class="tab === 'features' ? 'border-brand-500 text-brand-500' : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'"
+              class="border-b-2 px-4 py-3 text-sm font-medium transition focus:outline-none focus:ring-2 focus:ring-brand-300 focus:ring-offset-1">
+        Feature Importance
+      </button>
+      {% endif %}
     </div>
+  </div>
 
-    {# ── Per-grade charts ── #}
-    <div class="tab-panel active" id="tab-charts">
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:20px">
-        {% for stat in summary_stats %}
-        <div>
-          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px">
-            <div style="display:flex;align-items:center;gap:8px">
-              <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:{{ stat.color }}"></span>
-              <span style="font-weight:600;font-size:14px;color:var(--ink-2)">{{ stat.grade }}</span>
-            </div>
-            <button class="btn btn-ghost" onclick="downloadChart('{{ stat.grade_key }}')" style="font-size:11px;padding:3px 10px">
-              <i class="fas fa-download"></i>
-            </button>
+  {# ── Per-grade charts ── #}
+  <div x-show="tab === 'charts'" x-transition class="p-5">
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {% for stat in summary_stats %}
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        <div class="mb-3 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="h-2.5 w-2.5 rounded-full" style="background:{{ stat.color }}"></span>
+            <span class="text-sm font-semibold text-gray-800 dark:text-white/90">{{ stat.grade }}</span>
           </div>
-          <div class="chart-wrap" style="height:220px">
-            <canvas id="chart-{{ stat.grade_key }}"></canvas>
-          </div>
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--muted);margin-top:10px;padding-top:8px;border-top:1px solid var(--border)">
-            <span>Min: <strong style="color:var(--ink)">{{ stat.min_historical }}</strong></span>
-            <span>Avg: <strong style="color:var(--ink)">{{ stat.avg_historical }}</strong></span>
-            <span>Max: <strong style="color:var(--ink)">{{ stat.max_historical }}</strong></span>
-            <span>Next: <strong style="color:var(--green-mid)">{{ stat.next_forecast }}</strong></span>
-          </div>
+          <button onclick="downloadChart('{{ stat.grade_key }}')"
+                  class="inline-flex h-7 w-7 items-center justify-center rounded-md text-xs text-gray-400 transition hover:bg-gray-100 hover:text-gray-700 dark:hover:bg-white/[0.06] dark:hover:text-gray-200"
+                  aria-label="Download {{ stat.grade }} chart">
+            <i class="fas fa-download"></i>
+          </button>
         </div>
-        {% endfor %}
-      </div>
-    </div>
-
-    {# ── Model comparison ── #}
-    <div class="tab-panel" id="tab-models">
-      <p style="font-size:13px;color:var(--muted);margin-bottom:18px">
-        Walk-forward time-series cross-validation (TimeSeriesSplit). Lower MAE/RMSE/MAPE and higher R² = better.
-        <strong style="color:var(--green-mid)">Highlighted rows</strong> = best model per grade.
-      </p>
-      {% for row in model_comparison %}
-      <div style="margin-bottom:24px">
-        <div style="font-size:13px;font-weight:600;color:var(--ink-2);margin-bottom:8px;display:flex;align-items:center;gap:8px">
-          <span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:{{ grade_colors|default:'{}' }}"></span>
-          {{ row.grade }}
-          <span style="font-size:11px;font-weight:400;color:var(--muted)">({{ row.grade_key }})</span>
+        <div class="relative h-[220px]">
+          <canvas id="chart-{{ stat.grade_key }}"></canvas>
         </div>
-        <div class="tbl-wrap">
-          <table>
-            <thead>
-              <tr>
-                <th>Model</th>
-                <th>MAE (¢/kg)</th>
-                <th>RMSE (¢/kg)</th>
-                <th>MAPE (%)</th>
-                <th>R²</th>
-                <th></th>
-              </tr>
-            </thead>
-            <tbody>
-              {% for m in row.models %}
-              <tr {% if m.best %}class="best-row"{% endif %}>
-                <td style="font-weight:500">{{ m.name }}</td>
-                <td>{{ m.mae }}</td>
-                <td>{{ m.rmse }}</td>
-                <td>{{ m.mape }}%</td>
-                <td>{{ m.r2 }}</td>
-                <td>{% if m.best %}<span class="badge badge-best">✓ Best</span>{% endif %}</td>
-              </tr>
-              {% endfor %}
-            </tbody>
-          </table>
+        <div class="mt-3 grid grid-cols-4 gap-2 border-t border-gray-100 pt-3 text-[11px] text-gray-500 dark:border-gray-800 dark:text-gray-400">
+          <div>Min<br><strong class="text-gray-800 dark:text-white/90">{{ stat.min_historical }}</strong></div>
+          <div>Avg<br><strong class="text-gray-800 dark:text-white/90">{{ stat.avg_historical }}</strong></div>
+          <div>Max<br><strong class="text-gray-800 dark:text-white/90">{{ stat.max_historical }}</strong></div>
+          <div>Next<br><strong class="text-brand-500">{{ stat.next_forecast }}</strong></div>
         </div>
       </div>
       {% endfor %}
-
-      <div class="forecast-note" style="margin-top:8px">
-        <i class="fas fa-flask" style="margin-top:1px;flex-shrink:0"></i>
-        <span>
-          Naïve model (last-value carry-forward) serves as a statistical baseline.
-          Any model that does not beat Naïve MAPE should not be used in production.
-          SARIMAX requires ≥8 observations; results marked — where unavailable.
-        </span>
-      </div>
     </div>
+  </div>
 
-    {# ── Feature importance ── #}
-    <div class="tab-panel" id="tab-features">
-      <p style="font-size:13px;color:var(--muted);margin-bottom:18px">
-        Random Forest feature importances (mean decrease in impurity) trained on the full dataset.
-        Larger values = stronger influence on price prediction.
-      </p>
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:20px">
-        {% for grade_key, chart_url in feature_charts.items %}
-        <div class="card" style="padding:16px;border:1px solid var(--border)">
-          {% if chart_url %}
-          <img src="{{ chart_url }}" alt="Feature importance for {{ grade_key }}"
-               style="width:100%;border-radius:6px">
-          {% else %}
-          <p style="font-size:13px;color:var(--muted);text-align:center;padding:20px 0">
-            Not enough data for {{ grade_key }}
+  {# ── Model comparison ── #}
+  <div x-show="tab === 'models'" x-transition x-cloak class="p-5">
+
+    {# Global model selection justification #}
+    <div class="mb-6 rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+      <div class="mb-3 flex items-center justify-between">
+        <div>
+          <h3 class="text-sm font-semibold text-gray-800 dark:text-white/90">Why <span class="text-brand-500">{{ chosen_model }}</span>?</h3>
+          <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+            One model is used uniformly across all grades. The choice below is data-driven: each model is ranked per grade
+            on MAPE, and the model with the lowest <strong>average rank</strong> wins. Rank-based aggregation prevents grades
+            with larger absolute prices from dominating the decision.
           </p>
-          {% endif %}
         </div>
-        {% empty %}
-        <p style="font-size:13px;color:var(--muted)">No feature importance data available.</p>
-        {% endfor %}
       </div>
-      <div class="forecast-note" style="margin-top:16px">
-        <i class="fas fa-info-circle" style="margin-top:1px;flex-shrink:0"></i>
-        <span>
-          Lag features (recent prices) typically dominate — this is expected for commodity time series.
-          Month/quarter features capture seasonal patterns. Time index captures long-run trend.
-        </span>
+      <div class="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-white/[0.03]">
+            <tr class="text-left text-[11px] uppercase tracking-[0.06em] text-gray-500 dark:text-gray-400">
+              <th class="px-4 py-2.5">Model</th>
+              <th class="px-4 py-2.5">Mean rank ↓</th>
+              <th class="px-4 py-2.5">Mean MAPE</th>
+              <th class="px-4 py-2.5">Mean RMSE</th>
+              <th class="px-4 py-2.5">Mean MAE</th>
+              <th class="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+            {% for r in global_ranking %}
+            <tr class="{% if r.chosen %}bg-brand-50/60 dark:bg-brand-500/[0.08]{% endif %}">
+              <td class="px-4 py-2.5 font-medium text-gray-800 dark:text-white/90">{{ r.name }}</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ r.mean_rank }}</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ r.mean_mape }}%</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ r.mean_rmse }}</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ r.mean_mae }}</td>
+              <td class="px-4 py-2.5">
+                {% if r.chosen %}
+                <span class="inline-flex items-center gap-1 rounded-full bg-brand-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                  <i class="fas fa-cube text-[9px]"></i> Chosen
+                </span>
+                {% endif %}
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
       </div>
     </div>
 
+    <h3 class="mb-2 text-sm font-semibold text-gray-800 dark:text-white/90">Per-grade cross-validation</h3>
+    <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
+      Walk-forward time-series cross-validation (TimeSeriesSplit). Lower MAE/RMSE/MAPE and higher R² = better.
+      <span class="font-semibold text-success-600">Green rows</span> = best model per grade.
+      <span class="font-semibold text-brand-500">Brand ring</span> = the model selected globally.
+    </p>
+
+    {% for row in model_comparison %}
+    <div class="mb-6">
+      <div class="mb-2 flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white/90">
+        <span class="h-2 w-2 rounded-full" style="background:{{ row.color }}"></span>
+        {{ row.grade }}
+        <span class="text-xs font-normal text-gray-400">({{ row.grade_key }})</span>
+      </div>
+      <div class="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
+        <table class="w-full text-sm">
+          <thead class="bg-gray-50 dark:bg-white/[0.03]">
+            <tr class="text-left text-[11px] uppercase tracking-[0.06em] text-gray-500 dark:text-gray-400">
+              <th class="px-4 py-2.5">Model</th>
+              <th class="px-4 py-2.5">MAE (¢/kg)</th>
+              <th class="px-4 py-2.5">RMSE (¢/kg)</th>
+              <th class="px-4 py-2.5">MAPE (%)</th>
+              <th class="px-4 py-2.5">R²</th>
+              <th class="px-4 py-2.5"></th>
+            </tr>
+          </thead>
+          <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+            {% for m in row.models %}
+            <tr class="{% if m.best %}bg-success-50 dark:bg-success-500/[0.08]{% endif %} {% if m.chosen %}ring-2 ring-inset ring-brand-300 dark:ring-brand-500/40{% endif %}">
+              <td class="px-4 py-2.5 font-medium text-gray-800 dark:text-white/90">{{ m.name }}</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ m.mae }}</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ m.rmse }}</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ m.mape }}%</td>
+              <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ m.r2 }}</td>
+              <td class="px-4 py-2.5">
+                <div class="flex flex-wrap gap-1">
+                  {% if m.best %}
+                  <span class="inline-flex items-center gap-1 rounded-full bg-success-100 px-2 py-0.5 text-[11px] font-semibold text-success-700 dark:bg-success-500/20 dark:text-success-400">
+                    <i class="fas fa-check text-[9px]"></i> Best for grade
+                  </span>
+                  {% endif %}
+                  {% if m.chosen %}
+                  <span class="inline-flex items-center gap-1 rounded-full bg-brand-500 px-2 py-0.5 text-[11px] font-semibold text-white">
+                    <i class="fas fa-cube text-[9px]"></i> Used
+                  </span>
+                  {% endif %}
+                </div>
+              </td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+    </div>
+    {% endfor %}
+
+    <div class="mt-2 flex items-start gap-2 rounded-lg border border-warning-200 bg-warning-50 px-4 py-2.5 text-xs text-warning-800 dark:border-warning-500/30 dark:bg-warning-500/10 dark:text-warning-300">
+      <i class="fas fa-flask mt-0.5 flex-shrink-0"></i>
+      <span>
+        Naïve model (last-value carry-forward) serves as a statistical baseline.
+        Any model that does not beat Naïve MAPE should not be used in production.
+        SARIMAX requires ≥8 observations; results marked — where unavailable.
+      </span>
+    </div>
+  </div>
+
+  {# ── Validation tab ── #}
+  <div x-show="tab === 'validation'" x-transition x-cloak class="p-5">
+
+    {% if validation_summary %}
+    <div class="mb-5 grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        <div class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Mean MAPE</div>
+        <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white/90">{{ validation_summary.mean_mape }}%</div>
+        <div class="text-[11px] text-gray-500 dark:text-gray-400">on holdout test set</div>
+      </div>
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        <div class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Mean bias</div>
+        <div class="mt-1 text-xl font-semibold {% if validation_summary.mean_bias < 0 %}text-error-600 dark:text-error-400{% else %}text-success-600 dark:text-success-400{% endif %}">
+          {{ validation_summary.mean_bias }}
+        </div>
+        <div class="text-[11px] text-gray-500 dark:text-gray-400">¢/kg · + = under-forecast, − = over-forecast</div>
+      </div>
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        <div class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Directional accuracy</div>
+        <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white/90">
+          {% if validation_summary.mean_directional is not None %}{{ validation_summary.mean_directional }}%{% else %}—{% endif %}
+        </div>
+        <div class="text-[11px] text-gray-500 dark:text-gray-400">correct up/down direction</div>
+      </div>
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        <div class="text-[10px] uppercase tracking-[0.08em] text-gray-500 dark:text-gray-400">Beats naïve</div>
+        <div class="mt-1 text-xl font-semibold text-gray-900 dark:text-white/90">
+          {{ validation_summary.beats_naive_count }} / {{ validation_summary.grades_evaluated }}
+        </div>
+        <div class="text-[11px] text-gray-500 dark:text-gray-400">grades pass naïve baseline</div>
+      </div>
+    </div>
+    {% endif %}
+
+    <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
+      Chronological 80/20 holdout: model is fitted on the first 80% of each grade's series and asked to predict the remaining 20%
+      it has never seen. Compared against the naïve last-value forecast on the same window.
+    </p>
+
+    <div class="overflow-x-auto rounded-lg border border-gray-100 dark:border-gray-800">
+      <table class="w-full text-sm">
+        <thead class="bg-gray-50 dark:bg-white/[0.03]">
+          <tr class="text-left text-[11px] uppercase tracking-[0.06em] text-gray-500 dark:text-gray-400">
+            <th class="px-4 py-2.5">Grade</th>
+            <th class="px-4 py-2.5">Train / Test</th>
+            <th class="px-4 py-2.5">MAE</th>
+            <th class="px-4 py-2.5">RMSE</th>
+            <th class="px-4 py-2.5">MAPE</th>
+            <th class="px-4 py-2.5">Bias</th>
+            <th class="px-4 py-2.5">Direction</th>
+            <th class="px-4 py-2.5">Naïve MAPE</th>
+            <th class="px-4 py-2.5">vs Naïve</th>
+          </tr>
+        </thead>
+        <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
+          {% for v in validation_rows %}
+          <tr>
+            <td class="px-4 py-2.5 font-medium text-gray-800 dark:text-white/90">
+              <span class="inline-block h-2 w-2 rounded-full align-middle" style="background:{{ v.color }}"></span>
+              {{ v.grade }}
+            </td>
+            <td class="px-4 py-2.5 text-gray-600 dark:text-gray-400">{{ v.train_size }} / {{ v.test_size }}</td>
+            <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ v.mae }}</td>
+            <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ v.rmse }}</td>
+            <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ v.mape }}%</td>
+            <td class="px-4 py-2.5 {% if v.bias < 0 %}text-error-600 dark:text-error-400{% else %}text-success-600 dark:text-success-400{% endif %}">{{ v.bias }}</td>
+            <td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">{{ v.directional }}{% if v.directional != '—' %}%{% endif %}</td>
+            <td class="px-4 py-2.5 text-gray-500 dark:text-gray-400">{{ v.naive_mape }}%</td>
+            <td class="px-4 py-2.5">
+              {% if v.beats_naive %}
+              <span class="inline-flex items-center gap-1 rounded-full bg-success-100 px-2 py-0.5 text-[11px] font-semibold text-success-700 dark:bg-success-500/20 dark:text-success-400">
+                <i class="fas fa-check text-[9px]"></i>
+                {% if v.improvement %}{{ v.improvement }}% better{% else %}Better{% endif %}
+              </span>
+              {% else %}
+              <span class="inline-flex items-center gap-1 rounded-full bg-error-100 px-2 py-0.5 text-[11px] font-semibold text-error-700 dark:bg-error-500/20 dark:text-error-400">
+                <i class="fas fa-xmark text-[9px]"></i> Worse
+              </span>
+              {% endif %}
+            </td>
+          </tr>
+          {% empty %}
+          <tr><td colspan="9" class="px-4 py-6 text-center text-gray-400">Not enough data to run holdout validation.</td></tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if validation_rows %}
+    <h3 class="mt-6 mb-3 text-sm font-semibold text-gray-800 dark:text-white/90">Predicted vs actual on the held-out window</h3>
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {% for v in validation_rows %}
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        <div class="mb-2 flex items-center justify-between">
+          <div class="flex items-center gap-2">
+            <span class="h-2.5 w-2.5 rounded-full" style="background:{{ v.color }}"></span>
+            <span class="text-sm font-semibold text-gray-800 dark:text-white/90">{{ v.grade }}</span>
+          </div>
+          <span class="text-[11px] text-gray-500 dark:text-gray-400">MAPE {{ v.mape }}%</span>
+        </div>
+        <div class="relative h-[180px]">
+          <canvas id="validation-chart-{{ v.grade_key }}" data-grade="{{ v.grade_key }}"></canvas>
+        </div>
+      </div>
+      {% endfor %}
+    </div>
+    {% endif %}
+
+    <div class="mt-4 flex items-start gap-2 rounded-lg border border-blue-light-200 bg-blue-light-50 px-4 py-2.5 text-xs text-blue-light-800 dark:border-blue-light-500/30 dark:bg-blue-light-500/10 dark:text-blue-light-300">
+      <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
+      <span>
+        <strong>Bias</strong> is the mean residual (actual − predicted): a positive value means the model systematically under-predicts.
+        <strong>Directional accuracy</strong> measures how often the model gets the up/down direction right vs the previous actual observation.
+      </span>
+    </div>
+  </div>
+
+  {# ── Feature importance ── #}
+  <div x-show="tab === 'features'" x-transition x-cloak class="p-5">
+    <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
+      Random Forest feature importances (mean decrease in impurity) trained on the full dataset.
+      Larger values = stronger influence on price prediction.
+    </p>
+    <div class="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-3">
+      {% for grade_key, chart_url in feature_charts.items %}
+      <div class="rounded-xl border border-gray-100 p-4 dark:border-gray-800">
+        {% if chart_url %}
+        <img src="{{ chart_url }}" alt="Feature importance for {{ grade_key }}" class="w-full rounded-md">
+        {% else %}
+        <p class="py-10 text-center text-sm text-gray-500 dark:text-gray-400">
+          Not enough data for {{ grade_key }}
+        </p>
+        {% endif %}
+      </div>
+      {% empty %}
+      <p class="text-sm text-gray-500 dark:text-gray-400">No feature importance data available.</p>
+      {% endfor %}
+    </div>
+    <div class="mt-4 flex items-start gap-2 rounded-lg border border-blue-light-200 bg-blue-light-50 px-4 py-2.5 text-xs text-blue-light-800 dark:border-blue-light-500/30 dark:bg-blue-light-500/10 dark:text-blue-light-300">
+      <i class="fas fa-info-circle mt-0.5 flex-shrink-0"></i>
+      <span>
+        Lag features (recent prices) typically dominate — this is expected for commodity time series.
+        Month/quarter features capture seasonal patterns. Time index captures long-run trend.
+      </span>
+    </div>
   </div>
 </div>
 
-{# ── Data transparency panel ─────────────────────────────── #}
-<div class="card animate-in">
-  <div class="card-header">
-    <span class="card-title"><i class="fas fa-database"></i> Raw Auction Data</span>
-    <span class="pill pill-green">{{ total_data_points }} records</span>
+{# ── Raw data card ────────────────────────────────────────────────── #}
+<div class="rounded-2xl border border-gray-200 bg-white shadow-theme-xs dark:border-gray-800 dark:bg-white/[0.03]">
+  <div class="flex flex-wrap items-center justify-between gap-3 border-b border-gray-100 px-5 py-4 dark:border-gray-800">
+    <div class="flex items-center gap-2 text-sm font-semibold text-gray-800 dark:text-white/90">
+      <i class="fas fa-database text-brand-500"></i> Raw Auction Data
+    </div>
+    <div class="flex flex-wrap items-center gap-3">
+      <label class="flex items-center gap-2 rounded-lg border border-gray-200 bg-white px-3 py-1.5 transition focus-within:border-brand-500 focus-within:ring-2 focus-within:ring-brand-300/40 dark:border-gray-800 dark:bg-white/[0.03]">
+        <i class="fas fa-search text-xs text-gray-400"></i>
+        <input type="search" id="raw-data-search" placeholder="Search by date (e.g. 2024 or Jan)"
+               autocomplete="off"
+               class="w-44 border-0 bg-transparent text-sm text-gray-800 placeholder:text-gray-400 focus:outline-none focus:ring-0 dark:text-white/90 dark:placeholder:text-gray-500 sm:w-56">
+      </label>
+      <span id="raw-data-count-pill"
+            class="inline-flex items-center rounded-full bg-brand-50 px-3 py-1 text-xs font-medium text-brand-700 dark:bg-brand-500/15 dark:text-brand-400">
+        {{ total_data_points }} records
+      </span>
+    </div>
   </div>
-  <div class="card-body">
-    <div class="tbl-wrap">
-      <table id="raw-data-table">
-        <thead>
-          <tr>
-            <th>Date</th>
-            <th>BP1 (¢/kg)</th>
-            <th>PF1 (¢/kg)</th>
-            <th>DUST1 (¢/kg)</th>
-            <th>FNGS 1/2 (¢/kg)</th>
-            <th>DUST 1/2 (¢/kg)</th>
+  <div class="p-5">
+    <div class="max-h-[520px] overflow-auto rounded-lg border border-gray-100 dark:border-gray-800">
+      <table id="raw-data-table" class="w-full text-sm">
+        <thead class="sticky top-0 z-1 bg-gray-50 dark:bg-gray-800">
+          <tr class="text-left text-[11px] uppercase tracking-[0.06em] text-gray-500 dark:text-gray-400">
+            <th data-sort="date"     data-type="date" class="cursor-pointer select-none whitespace-nowrap px-4 py-3 hover:text-brand-600">Date <span class="sort-arrow ml-1 opacity-30">▲▼</span></th>
+            <th data-sort="BP1"      data-type="num"  class="cursor-pointer select-none whitespace-nowrap px-4 py-3 hover:text-brand-600">BP1 <span class="sort-arrow ml-1 opacity-30">▲▼</span></th>
+            <th data-sort="PF1"      data-type="num"  class="cursor-pointer select-none whitespace-nowrap px-4 py-3 hover:text-brand-600">PF1 <span class="sort-arrow ml-1 opacity-30">▲▼</span></th>
+            <th data-sort="DUST1"    data-type="num"  class="cursor-pointer select-none whitespace-nowrap px-4 py-3 hover:text-brand-600">DUST1 <span class="sort-arrow ml-1 opacity-30">▲▼</span></th>
+            <th data-sort="FNGS_1_2" data-type="num"  class="cursor-pointer select-none whitespace-nowrap px-4 py-3 hover:text-brand-600">FNGS 1/2 <span class="sort-arrow ml-1 opacity-30">▲▼</span></th>
+            <th data-sort="DUST_1_2" data-type="num"  class="cursor-pointer select-none whitespace-nowrap px-4 py-3 hover:text-brand-600">DUST 1/2 <span class="sort-arrow ml-1 opacity-30">▲▼</span></th>
           </tr>
         </thead>
-        <tbody id="raw-data-body">
-          <tr><td colspan="6" style="text-align:center;color:var(--muted);padding:20px">Loading...</td></tr>
+        <tbody id="raw-data-body" class="divide-y divide-gray-100 dark:divide-gray-800">
+          <tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">Loading...</td></tr>
         </tbody>
       </table>
     </div>
@@ -214,17 +496,18 @@
 {% block extra_js %}
 <script>
 // ── Data from Django ──────────────────────────────────────────────────────
-const exportDates  = JSON.parse('{{ export_dates|escapejs }}');
+const exportDates   = JSON.parse('{{ export_dates|escapejs }}');
 const gradeDatasets = JSON.parse('{{ grade_datasets|escapejs }}');
 
 const GRADE_KEYS   = ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2'];
 const GRADE_LABELS = { BP1:'BP1', PF1:'PF1', DUST1:'DUST1', FNGS_1_2:'FNGS 1/2', DUST_1_2:'DUST 1/2' };
-const GRADE_COLORS = { BP1:'#2D6A4F', PF1:'#52B788', DUST1:'#F4A261', FNGS_1_2:'#E76F51', DUST_1_2:'#8338EC' };
 
 const chartInstances = {};
 
-// ── Shared Chart.js options ───────────────────────────────────────────────
 function baseOptions(showLegend = true) {
+  const isDark = document.documentElement.classList.contains('dark');
+  const tickColor   = isDark ? '#98A2B3' : '#475467';
+  const gridColor   = isDark ? 'rgba(255,255,255,0.06)' : 'rgba(16,24,40,0.06)';
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -232,24 +515,16 @@ function baseOptions(showLegend = true) {
     interaction: { mode: 'index', intersect: false, axis: 'x' },
     plugins: {
       legend: {
-        display: showLegend,
-        position: 'top',
+        display: showLegend, position: 'top',
         labels: {
           filter: item => !item.text.includes('Upper') && !item.text.includes('Lower'),
-          boxWidth: 24,
-          boxHeight: 3,
-          usePointStyle: false,
-          padding: 16,
-          font: { size: 12 }
+          color: tickColor, boxWidth: 24, boxHeight: 3, padding: 16, font: { size: 12 }
         }
       },
       tooltip: {
-        backgroundColor: '#0D2818',
-        titleColor: '#B7E4C7',
-        bodyColor: '#ffffff',
-        borderColor: '#2D6A4F',
-        borderWidth: 1,
-        padding: 10,
+        backgroundColor: isDark ? '#0c111d' : '#101828',
+        titleColor: '#B7E4C7', bodyColor: '#ffffff',
+        borderColor: '#2D6A4F', borderWidth: 1, padding: 10,
         callbacks: {
           label: ctx => {
             if (ctx.raw === null || ctx.raw === undefined) return null;
@@ -261,9 +536,9 @@ function baseOptions(showLegend = true) {
     },
     scales: {
       x: {
-        grid: { color: 'rgba(0,0,0,0.03)' },
+        grid: { color: gridColor },
         ticks: {
-          font: { size: 11 },
+          color: tickColor, font: { size: 11 },
           callback: (val, idx) => {
             const d = new Date(exportDates[idx]);
             return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
@@ -272,19 +547,16 @@ function baseOptions(showLegend = true) {
         }
       },
       y: {
-        grid: { color: 'rgba(0,0,0,0.04)' },
-        title: { display: true, text: '¢ / kg', font: { size: 11 } },
-        ticks: {
-          font: { size: 11 },
-          callback: v => v.toFixed(0)
-        }
+        grid: { color: gridColor },
+        title: { display: true, text: '¢ / kg', color: tickColor, font: { size: 11 } },
+        ticks: { color: tickColor, font: { size: 11 }, callback: v => v.toFixed(0) }
       }
     },
-    animation: { duration: 800, easing: 'easeInOutQuart' }
+    animation: { duration: 600, easing: 'easeInOutQuart' }
   };
 }
 
-// ── Combined chart ────────────────────────────────────────────────────────
+// Combined chart
 (function() {
   const ctx = document.getElementById('chart-combined').getContext('2d');
   chartInstances['combined'] = new Chart(ctx, {
@@ -294,27 +566,19 @@ function baseOptions(showLegend = true) {
   });
 })();
 
-// ── Per-grade charts ──────────────────────────────────────────────────────
+// Per-grade charts
 GRADE_KEYS.forEach(grade => {
   const canvas = document.getElementById(`chart-${grade}`);
   if (!canvas) return;
-
-  const relevant = gradeDatasets.filter(d =>
-    d.label.startsWith(GRADE_LABELS[grade])
-  );
-
-  const ctx = canvas.getContext('2d');
+  const relevant = gradeDatasets.filter(d => d.label.startsWith(GRADE_LABELS[grade]));
   const opts = baseOptions(false);
   opts.plugins.legend.display = false;
-
-  chartInstances[grade] = new Chart(ctx, {
-    type: 'line',
-    data: { labels: exportDates, datasets: relevant },
-    options: opts
+  chartInstances[grade] = new Chart(canvas.getContext('2d'), {
+    type: 'line', data: { labels: exportDates, datasets: relevant }, options: opts
   });
 });
 
-// ── Toggle helpers ────────────────────────────────────────────────────────
+// Toggle helpers
 let forecastVisible = true;
 let ciVisible = false;
 
@@ -327,7 +591,6 @@ function toggleForecastLines() {
   chart.update();
   document.getElementById('btn-toggle-forecast').style.opacity = forecastVisible ? '1' : '0.5';
 }
-
 function toggleCI() {
   ciVisible = !ciVisible;
   const chart = chartInstances['combined'];
@@ -344,14 +607,11 @@ function toggleCI() {
 (function() {
   const chart = chartInstances['combined'];
   chart.data.datasets.forEach(d => {
-    if (d.label && (d.label.includes('Upper') || d.label.includes('Lower'))) {
-      d.hidden = true;
-    }
+    if (d.label && (d.label.includes('Upper') || d.label.includes('Lower'))) d.hidden = true;
   });
   chart.update();
 })();
 
-// ── Download chart ────────────────────────────────────────────────────────
 function downloadChart(key) {
   const chart = chartInstances[key];
   if (!chart) return;
@@ -361,55 +621,154 @@ function downloadChart(key) {
   a.click();
 }
 
-// ── Tabs ──────────────────────────────────────────────────────────────────
-function switchTab(name) {
-  document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
-  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
-  document.getElementById(`tab-${name}`).classList.add('active');
-  event.target.classList.add('active');
+// Re-style charts when dark mode toggles
+const themeObserver = new MutationObserver(() => {
+  Object.entries(chartInstances).forEach(([k, c]) => {
+    const showLegend = (k === 'combined');
+    c.options = baseOptions(showLegend);
+    c.update('none');
+  });
+});
+themeObserver.observe(document.documentElement, { attributes: true, attributeFilter: ['class'] });
 
-  // Resize charts when tab becomes visible
-  setTimeout(() => {
-    GRADE_KEYS.forEach(g => {
-      if (chartInstances[g]) chartInstances[g].resize();
-    });
-  }, 50);
+// ── Validation charts (lazy-rendered when tab is opened) ─────────────────
+const validationPayload = JSON.parse('{{ validation_payload|escapejs }}');
+let validationChartsBuilt = false;
+
+function queueValidationCharts() {
+  if (validationChartsBuilt) return;
+  // Wait one tick so x-show makes canvases visible & sized.
+  requestAnimationFrame(() => requestAnimationFrame(buildValidationCharts));
 }
 
-// ── Raw data table ────────────────────────────────────────────────────────
+function buildValidationCharts() {
+  if (validationChartsBuilt || !validationPayload || !Array.isArray(validationPayload.rows)) return;
+  validationPayload.rows.forEach(r => {
+    const canvas = document.getElementById(`validation-chart-${r.grade_key}`);
+    if (!canvas) return;
+    const opts = baseOptions(false);
+    opts.plugins.legend.display = true;
+    opts.plugins.legend.labels.filter = () => true; // show both lines
+    opts.scales.x.ticks.callback = (val, idx) => {
+      const d = new Date(r.dates[idx]);
+      return isNaN(d) ? '' : d.toLocaleDateString('en-GB', { month: 'short', year: '2-digit' });
+    };
+    chartInstances[`val-${r.grade_key}`] = new Chart(canvas.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: r.dates,
+        datasets: [
+          { label: 'Actual',    data: r.actuals,     borderColor: r.color,    backgroundColor: r.color + '22',
+            borderWidth: 2.2, tension: 0.25, pointRadius: 3 },
+          { label: 'Predicted', data: r.predictions, borderColor: '#2D6A4F',  backgroundColor: '#2D6A4F11',
+            borderWidth: 2,   borderDash: [6, 4], tension: 0.25, pointRadius: 3 },
+        ]
+      },
+      options: opts,
+    });
+  });
+  validationChartsBuilt = true;
+}
+
+// ── Raw data table (search + sortable) ────────────────────────────────────
+let rawRows = [];
+let sortKey = 'date';
+let sortDir = 'desc';
+
 (function buildRawTable() {
-  const grades = ['BP1', 'PF1', 'DUST1', 'FNGS_1_2', 'DUST_1_2'];
+  const grades = GRADE_KEYS;
   const allDatasets = {};
   gradeDatasets.forEach(d => {
     const gkey = grades.find(g => d.label.startsWith(GRADE_LABELS[g]) && d.label.includes('Actual'));
     if (gkey) allDatasets[gkey] = d.data;
   });
-
-  const tbody = document.getElementById('raw-data-body');
-  tbody.innerHTML = '';
-
   exportDates.forEach((dateStr, i) => {
-    const row = document.createElement('tr');
-    const d = new Date(dateStr);
-    const label = isNaN(d) ? dateStr : d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' });
-
-    let hasData = grades.some(g => allDatasets[g] && allDatasets[g][i] !== null);
+    const hasData = grades.some(g => allDatasets[g] && allDatasets[g][i] !== null && allDatasets[g][i] !== undefined);
     if (!hasData) return;
-
-    const cells = [`<td>${label}</td>`];
+    const d = new Date(dateStr);
+    const row = {
+      dateStr,
+      dateMs: isNaN(d) ? 0 : d.getTime(),
+      label: isNaN(d) ? dateStr : d.toLocaleDateString('en-GB', { month: 'short', year: 'numeric' }),
+    };
     grades.forEach(g => {
-      const val = allDatasets[g] && allDatasets[g][i] !== null && allDatasets[g][i] !== undefined
-        ? parseFloat(allDatasets[g][i]).toFixed(1)
-        : '—';
-      cells.push(`<td>${val}</td>`);
+      const v = allDatasets[g] && allDatasets[g][i];
+      row[g] = (v === null || v === undefined) ? null : parseFloat(v);
     });
-
-    row.innerHTML = cells.join('');
-    tbody.appendChild(row);
+    rawRows.push(row);
   });
-
-  document.getElementById('sidebar-data-count').textContent =
-    document.querySelectorAll('#raw-data-body tr').length;
+  renderRawTable();
+  document.getElementById('sidebar-data-count').textContent = rawRows.length;
+  const pill = document.getElementById('raw-data-count-pill');
+  if (pill) pill.textContent = `${rawRows.length} records`;
 })();
+
+function renderRawTable(filterText = '') {
+  const grades = GRADE_KEYS;
+  const tbody = document.getElementById('raw-data-body');
+  const q = filterText.trim().toLowerCase();
+  let rows = rawRows;
+  if (q) rows = rows.filter(r => r.label.toLowerCase().includes(q) || r.dateStr.toLowerCase().includes(q));
+  rows = rows.slice().sort((a, b) => {
+    let av, bv;
+    if (sortKey === 'date') { av = a.dateMs; bv = b.dateMs; }
+    else { av = a[sortKey] ?? -Infinity; bv = b[sortKey] ?? -Infinity; }
+    return sortDir === 'asc' ? av - bv : bv - av;
+  });
+  tbody.innerHTML = '';
+  if (rows.length === 0) {
+    tbody.innerHTML = `<tr><td colspan="6" class="px-4 py-10 text-center text-gray-400">No records match "${filterText}"</td></tr>`;
+    return;
+  }
+  const frag = document.createDocumentFragment();
+  rows.forEach(r => {
+    const tr = document.createElement('tr');
+    tr.className = 'transition hover:bg-gray-50 dark:hover:bg-white/[0.03]';
+    const cells = [`<td class="px-4 py-2.5 text-gray-800 dark:text-gray-200">${r.label}</td>`];
+    grades.forEach(g => {
+      const v = r[g];
+      const display = (v === null || v === undefined || isNaN(v)) ? '—' : v.toFixed(1);
+      cells.push(`<td class="px-4 py-2.5 text-gray-700 dark:text-gray-300">${display}</td>`);
+    });
+    tr.innerHTML = cells.join('');
+    frag.appendChild(tr);
+  });
+  tbody.appendChild(frag);
+  updateSortIndicators();
+}
+
+function updateSortIndicators() {
+  document.querySelectorAll('#raw-data-table thead th[data-sort]').forEach(th => {
+    const arrow = th.querySelector('.sort-arrow');
+    if (!arrow) return;
+    if (th.dataset.sort === sortKey) {
+      arrow.textContent = sortDir === 'asc' ? '▲' : '▼';
+      arrow.classList.remove('opacity-30');
+      arrow.classList.add('opacity-100', 'text-brand-500');
+    } else {
+      arrow.textContent = '▲▼';
+      arrow.classList.add('opacity-30');
+      arrow.classList.remove('opacity-100', 'text-brand-500');
+    }
+  });
+}
+
+document.querySelectorAll('#raw-data-table thead th[data-sort]').forEach(th => {
+  th.addEventListener('click', () => {
+    const key = th.dataset.sort;
+    if (sortKey === key) sortDir = sortDir === 'asc' ? 'desc' : 'asc';
+    else { sortKey = key; sortDir = 'desc'; }
+    renderRawTable(document.getElementById('raw-data-search').value);
+  });
+});
+
+let searchTimer;
+const searchEl = document.getElementById('raw-data-search');
+if (searchEl) {
+  searchEl.addEventListener('input', (e) => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => renderRawTable(e.target.value), 120);
+  });
+}
 </script>
 {% endblock %}

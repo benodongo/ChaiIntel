@@ -438,13 +438,32 @@ def add_confidence_intervals(df, forecasts, grade):
     return forecasts
 
 # ---------------------------------------------------------------------------
+# Forecast-function registry
+# ---------------------------------------------------------------------------
+# Maps the human-readable model name (used in evaluation tables) back to the
+# function that produces a forecast for a single grade. Lets us pick ONE model
+# globally and apply it uniformly across all grades.
+FORECAST_FUNCS = {
+    'Naïve':             naive_forecast,
+    'Linear Regression': linear_forecast,
+    'SARIMAX':           sarimax_forecast,
+    'Random Forest':     rf_forecast,
+}
+
+# Models excluded from global selection. Naïve is kept in the comparison
+# tables as a *baseline* but must never be "chosen" — by convention any
+# production model must outperform naïve carry-forward.
+GLOBAL_SELECTION_EXCLUDE = {'Naïve'}
+
+# ---------------------------------------------------------------------------
 # Best-model selection
 # ---------------------------------------------------------------------------
 
 def select_best_model(grade_metrics):
     """
-    Pick the model with lowest MAPE. Falls back to RF if metrics missing.
-    Returns the model name string.
+    Pick the model with lowest MAPE for a SINGLE grade.
+    Used inside the per-grade evaluation table.
+    Falls back to Random Forest if metrics are missing.
     """
     candidates = {k: v for k, v in grade_metrics.items() if v and v.get('mape') is not None}
     if not candidates:
@@ -452,13 +471,225 @@ def select_best_model(grade_metrics):
     return min(candidates, key=lambda k: candidates[k]['mape'])
 
 
+def select_global_model(evaluation_results):
+    """
+    Pick ONE model used for every grade. Two-stage ranking:
+      1. For each grade, rank the four models by MAPE (1 = best).
+      2. Average each model's rank across all grades.
+      3. Lowest average rank wins; ties broken by mean MAPE, then mean RMSE.
+
+    Using mean-rank instead of mean-MAPE avoids letting a single grade with
+    huge prices distort the choice (rank is scale-free).
+
+    Returns:
+      {
+        'name': str,                # chosen model name
+        'mean_rank': float,         # average rank across grades (1=best)
+        'mean_mape': float,         # mean MAPE across grades for chosen model
+        'mean_rmse': float,
+        'mean_mae':  float,
+        'ranking':  list[dict],     # full ranking table, used for justification UI
+      }
+    """
+    # Collect each model's metrics across grades
+    by_model = {name: [] for name in FORECAST_FUNCS.keys() if name not in GLOBAL_SELECTION_EXCLUDE}
+    rank_acc = {name: [] for name in FORECAST_FUNCS.keys() if name not in GLOBAL_SELECTION_EXCLUDE}
+
+    for grade, ev in evaluation_results.items():
+        metrics = ev.get('metrics', {})
+        # Rank only the eligible models (Naïve is reference-only)
+        available = [(m, metrics[m]['mape'])
+                     for m in metrics
+                     if m not in GLOBAL_SELECTION_EXCLUDE
+                     and metrics[m] and metrics[m].get('mape') is not None]
+        available.sort(key=lambda t: t[1])
+        for rank, (m, _mape) in enumerate(available, start=1):
+            rank_acc[m].append(rank)
+        for m, mdata in metrics.items():
+            if m in GLOBAL_SELECTION_EXCLUDE:
+                continue
+            if mdata and mdata.get('mape') is not None:
+                by_model[m].append(mdata)
+
+    ranking = []
+    for name in by_model.keys():
+        ranks = rank_acc[name]
+        rows = by_model[name]
+        if not rows:
+            continue
+        ranking.append({
+            'name': name,
+            'mean_rank': float(np.mean(ranks)) if ranks else float('inf'),
+            'mean_mape': float(np.mean([r['mape'] for r in rows])),
+            'mean_rmse': float(np.mean([r['rmse'] for r in rows])),
+            'mean_mae':  float(np.mean([r['mae']  for r in rows])),
+            'grades_evaluated': len(rows),
+        })
+
+    if not ranking:
+        return {
+            'name': 'Random Forest',
+            'mean_rank': float('nan'),
+            'mean_mape': float('nan'),
+            'mean_rmse': float('nan'),
+            'mean_mae':  float('nan'),
+            'ranking': [],
+        }
+
+    ranking.sort(key=lambda r: (r['mean_rank'], r['mean_mape'], r['mean_rmse']))
+    winner = ranking[0]
+    return {
+        'name':      winner['name'],
+        'mean_rank': winner['mean_rank'],
+        'mean_mape': winner['mean_mape'],
+        'mean_rmse': winner['mean_rmse'],
+        'mean_mae':  winner['mean_mae'],
+        'ranking':   ranking,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Holdout validation diagnostics
+# ---------------------------------------------------------------------------
+
+def _holdout_split(df, grade, holdout_frac=0.2, min_test=2):
+    """Return (train_df, test_df) split chronologically. Drops NaNs in grade."""
+    clean = df[['date', grade]].dropna().reset_index(drop=True)
+    n = len(clean)
+    n_test = max(min_test, int(round(n * holdout_frac)))
+    n_test = min(n_test, max(1, n - 4))  # always leave at least 4 train rows
+    if n - n_test < 4 or n_test < 1:
+        return None, None
+    return clean.iloc[:n - n_test].reset_index(drop=True), clean.iloc[n - n_test:].reset_index(drop=True)
+
+
+def _directional_accuracy(actual, predicted):
+    """% of time forecast direction (up/down vs previous actual) matches reality."""
+    if len(actual) < 2:
+        return None
+    actual = np.asarray(actual, dtype=float)
+    predicted = np.asarray(predicted, dtype=float)
+    a_dir = np.sign(np.diff(actual))
+    p_dir = np.sign(predicted[1:] - actual[:-1])
+    match = (a_dir == p_dir) & (a_dir != 0)
+    return float(match.mean() * 100) if len(a_dir) else None
+
+
+def validate_model(df, model_name):
+    """
+    Holdout validation for the chosen global model across all grades.
+
+    For each grade:
+      - chronological 80/20 split,
+      - refit chosen model on train,
+      - forecast the test horizon,
+      - compute MAE / RMSE / MAPE / bias / directional accuracy,
+      - compare against Naïve baseline on the same window.
+
+    Returns:
+      {
+        'model': model_name,
+        'per_grade': {grade: {...}},   # detail per grade incl. residuals
+        'summary': {                   # aggregate across grades
+          'mean_mape': float, 'mean_rmse': float, 'mean_bias': float,
+          'mean_directional': float, 'beats_naive_count': int,
+          'grades_evaluated': int,
+        }
+      }
+    """
+    forecast_fn = FORECAST_FUNCS.get(model_name, rf_forecast)
+    per_grade = {}
+
+    for grade in GRADES:
+        if grade not in df.columns:
+            continue
+        train, test = _holdout_split(df, grade)
+        if train is None or test is None or len(test) == 0:
+            continue
+
+        # Forecast horizon = length of held-out tail
+        try:
+            fc = forecast_fn(train, grade, periods=len(test))
+        except Exception as e:
+            per_grade[grade] = {'error': str(e)}
+            continue
+
+        # The forecast frame appends future rows AFTER the train tail.
+        # Extract just the future (test) horizon.
+        fc_future = fc[fc['date'] > train['date'].iloc[-1]].head(len(test))
+        fc_col = f'forecast_{grade}'
+        if fc_col not in fc_future.columns or len(fc_future) == 0:
+            continue
+
+        y_true = test[grade].to_numpy(dtype=float)
+        y_pred = fc_future[fc_col].to_numpy(dtype=float)[: len(y_true)]
+        if len(y_pred) != len(y_true) or len(y_true) == 0:
+            continue
+
+        residuals = y_true - y_pred
+        mae   = float(mean_absolute_error(y_true, y_pred))
+        rmse  = float(np.sqrt(mean_squared_error(y_true, y_pred)))
+        mape  = float(np.mean(np.abs(residuals / y_true)) * 100)
+        bias  = float(residuals.mean())
+        d_acc = _directional_accuracy(y_true, y_pred)
+
+        # Naïve baseline on the same window
+        naive_pred = np.full_like(y_true, train[grade].iloc[-1], dtype=float)
+        naive_mape = float(np.mean(np.abs((y_true - naive_pred) / y_true)) * 100)
+
+        per_grade[grade] = {
+            'display_name':       get_grade_display_name(grade),
+            'train_size':         int(len(train)),
+            'test_size':          int(len(y_true)),
+            'mae':                mae,
+            'rmse':               rmse,
+            'mape':               mape,
+            'bias':               bias,
+            'directional_acc':    d_acc,
+            'naive_mape':         naive_mape,
+            'beats_naive':        mape < naive_mape,
+            'improvement_vs_naive_pct': float((naive_mape - mape) / naive_mape * 100) if naive_mape > 0 else None,
+            # Series for plotting in the UI
+            'dates':              [str(d.date()) for d in test['date']],
+            'actuals':            [float(v) for v in y_true],
+            'predictions':        [float(v) for v in y_pred],
+            'residuals':          [float(v) for v in residuals],
+        }
+
+    valid = [g for g in per_grade.values() if 'error' not in g]
+    if not valid:
+        summary = {}
+    else:
+        summary = {
+            'mean_mape':         float(np.mean([g['mape'] for g in valid])),
+            'mean_rmse':         float(np.mean([g['rmse'] for g in valid])),
+            'mean_bias':         float(np.mean([g['bias'] for g in valid])),
+            'mean_directional':  float(np.mean([g['directional_acc'] for g in valid if g['directional_acc'] is not None])) if any(g['directional_acc'] is not None for g in valid) else None,
+            'beats_naive_count': int(sum(1 for g in valid if g['beats_naive'])),
+            'grades_evaluated':  len(valid),
+        }
+
+    return {
+        'model':    model_name,
+        'per_grade': per_grade,
+        'summary':  summary,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Main public API
 # ---------------------------------------------------------------------------
 
-def forecast_prices(df=None, periods=12, evaluate=False):
+def forecast_prices(df=None, periods=12, evaluate=False, model_name=None):
     """
     Main entry point called by views.py.
+
+    By default (model_name=None) this function:
+      1. Runs the evaluation across all four models,
+      2. Picks ONE global winner via `select_global_model`,
+      3. Uses that single model for every grade.
+
+    Pass `model_name` explicitly to force a specific model (e.g. 'Random Forest').
 
     Returns:
       - If evaluate=True: dict of evaluation results per grade
@@ -470,15 +701,23 @@ def forecast_prices(df=None, periods=12, evaluate=False):
     if evaluate:
         return get_model_evaluation(df)
 
+    # Decide which single model to use for every grade
+    if model_name is None:
+        eval_results = get_model_evaluation(df)
+        selection = select_global_model(eval_results)
+        model_name = selection['name']
+
+    forecast_fn = FORECAST_FUNCS.get(model_name, rf_forecast)
+
     forecasts = pd.DataFrame()
     for grade in GRADES:
         if grade not in df.columns:
             continue
         try:
-            fc = rf_forecast(df, grade, periods)
+            fc = forecast_fn(df, grade, periods)
             fc = add_confidence_intervals(df, fc, grade)
         except Exception as e:
-            print(f"Forecast error for {grade}: {e}")
+            print(f"Forecast error for {grade} with {model_name}: {e}")
             fc = naive_forecast(df, grade, periods)
 
         forecasts = fc if forecasts.empty else pd.merge(forecasts, fc, on='date', how='outer')
@@ -489,6 +728,7 @@ def forecast_prices(df=None, periods=12, evaluate=False):
 def get_model_evaluation(df=None):
     """
     Run all four models across all grades and return comparison metrics.
+    Kept verbose so the dashboard can JUSTIFY the choice of a single model.
     """
     if df is None:
         df = load_historical_data()

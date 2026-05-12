@@ -1,0 +1,38 @@
+# --- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# --- Virtual environments ------------------------------------------------
+venv/
+.venv/
+env/
+ENV/
+
+# --- Django --------------------------------------------------------------
+*.log
+local_settings.py
+db.sqlite3-journal
+staticfiles/
+
+# --- Node / Tailwind build deps ------------------------------------------
+node_modules/
+theme/node_modules/
+
+# --- IDE / OS ------------------------------------------------------------
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+*.swp
+*~
+
+# --- Build artefacts -----------------------------------------------------
+*.egg-info/
+build/
+dist/
