@@ -52,6 +52,17 @@ GRADE_LABELS = {
 }
 DATA_PATH = os.path.join(os.path.dirname(__file__), 'data', 'tea_auction_data.csv')
 
+# Optional exogenous columns extracted from the auction PDFs / FX data.
+# - <grade>_pkgs  : monthly sales volume for that grade (Pkgs)
+# - usd_kes       : USD→KES exchange rate for that month
+# These are kept in the loaded DataFrame and consumed by Random Forest as
+# extra predictors when `use_exog=True`. They are NOT used by Linear
+# Regression, SARIMAX or the Naïve baseline so the model-comparison table
+# stays apples-to-apples between the classical candidates.
+VOLUME_COLS = [f'{g}_pkgs' for g in GRADES]
+FX_COL      = 'usd_kes'
+EXOG_COLS   = VOLUME_COLS + [FX_COL]
+
 # ---------------------------------------------------------------------------
 # Data loading
 # ---------------------------------------------------------------------------
@@ -59,27 +70,34 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), 'data', 'tea_auction_data.cs
 def load_historical_data():
     """
     Load tea auction data from CSV.
-    Columns: date, auction_no, BP1, PF1, DUST1, FNGS_1_2, DUST_1_2
-    Returns a DataFrame sorted by date with internal grade column names.
+    Columns: date, auction_no, BP1, PF1, DUST1, FNGS_1_2, DUST_1_2,
+             optional <grade>_pkgs sales-volume columns, optional usd_kes.
+    Returns a DataFrame sorted by date with internal grade column names
+    plus the exogenous regressor columns where available.
 
     Handles both DD/MM/YYYY and YYYY-MM-DD date formats automatically.
     Aggregates multiple auctions in the same calendar month by taking
-    the mean price so the model always receives one row per month.
+    the mean so the model always receives one row per month.
     """
     df = pd.read_csv(DATA_PATH)
 
-    # Robust date parsing: handles DD/MM/YYYY and YYYY-MM-DD
-    df['date'] = pd.to_datetime(df['date'], dayfirst=True, errors='coerce')
-
-    # Drop rows where date could not be parsed
+    # Robust date parsing. Try ISO 8601 first (YYYY-MM-DD as written by the
+    # PDF extractor); fall back to day-first for legacy DD/MM/YYYY rows.
+    parsed = pd.to_datetime(df['date'], format='ISO8601', errors='coerce')
+    if parsed.isna().any():
+        fallback = pd.to_datetime(df.loc[parsed.isna(), 'date'],
+                                  dayfirst=True, errors='coerce')
+        parsed.loc[parsed.isna()] = fallback
+    df['date'] = parsed
     df = df.dropna(subset=['date'])
 
     # Snap all dates to month-start so grouping works correctly
     df['date'] = df['date'].values.astype('datetime64[M]').astype('datetime64[ns]')
 
-    # Aggregate: if multiple auctions fall in the same month, take the mean
-    grade_cols = [c for c in GRADES if c in df.columns]
-    df = df.groupby('date')[grade_cols].mean().reset_index()
+    # Aggregate: if multiple auctions fall in the same month, average
+    # numeric columns. We keep prices, volumes, and FX if present.
+    keep_cols = [c for c in GRADES + VOLUME_COLS + [FX_COL] if c in df.columns]
+    df = df.groupby('date')[keep_cols].mean().reset_index()
 
     df = df.sort_values('date').reset_index(drop=True)
     return df
@@ -92,7 +110,7 @@ def get_grade_display_name(grade):
 # Feature engineering
 # ---------------------------------------------------------------------------
 
-def create_features(df, grade, lag_periods=None):
+def create_features(df, grade, lag_periods=None, *, include_exog=False):
     """
     Build a feature matrix for time-series regression.
     Features:
@@ -101,11 +119,25 @@ def create_features(df, grade, lag_periods=None):
       - quarter
       - lag_1, lag_2, lag_3  (autoregressive)
       - rolling_mean_3        (local trend smoothing)
+
+    When include_exog=True and the columns are present in `df`, also adds:
+      - vol_lag_1   : previous month's sales volume for this grade
+      - usd_kes     : current month's USD→KES exchange rate (forward-filled)
+    These extra features are used only by the Random Forest model so that
+    the comparison table stays fair between the classical candidates.
     """
     if lag_periods is None:
         lag_periods = [1, 2, 3]
 
-    out = df[['date', grade]].copy()
+    cols = ['date', grade]
+    vol_col = f'{grade}_pkgs'
+    if include_exog:
+        if vol_col in df.columns:
+            cols.append(vol_col)
+        if FX_COL in df.columns:
+            cols.append(FX_COL)
+
+    out = df[cols].copy()
     out['time_idx'] = np.arange(len(out))
     out['month'] = out['date'].dt.month
     out['quarter'] = out['date'].dt.quarter
@@ -120,6 +152,17 @@ def create_features(df, grade, lag_periods=None):
         out['rolling_mean'] = out[grade].rolling(n_roll).mean().shift(1)
     else:
         out['rolling_mean'] = out[grade].shift(1)
+
+    if include_exog:
+        if vol_col in out.columns:
+            # Use lag-1 volume to avoid leakage of "this month's" volume
+            # into the model when predicting "this month's" price.
+            out['vol_lag_1'] = out[vol_col].shift(1)
+            out = out.drop(columns=[vol_col])
+        if FX_COL in out.columns:
+            # FX is generally known at the start of the month, so we can
+            # safely use the current value. Forward-fill any gaps.
+            out[FX_COL] = out[FX_COL].ffill()
 
     out = out.dropna().reset_index(drop=True)
     return out
@@ -318,9 +361,14 @@ def sarimax_cv_metrics(df, grade, n_splits=3):
 # ---------------------------------------------------------------------------
 # Model 4 – Random Forest
 # ---------------------------------------------------------------------------
+# When True, Random Forest sees the volume + FX features in addition to the
+# autoregressive/seasonal ones. Other models are unaffected.
+RF_USE_EXOG = True
+
 
 def rf_forecast(df, grade, periods=12):
-    feat_df = create_features(df, grade)
+    use_exog = RF_USE_EXOG
+    feat_df = create_features(df, grade, include_exog=use_exog)
     if len(feat_df) < 4:
         return naive_forecast(df, grade, periods)
 
@@ -344,6 +392,13 @@ def rf_forecast(df, grade, periods=12):
     forecasts  = []
     lags_used  = [1, 2, 3]
 
+    # Carry-forward values for the optional exog regressors. We don't have
+    # future volume / FX, so the most-recent-known value is used — a sensible
+    # neutral assumption that lets the trained model still query its trees.
+    vol_col = f'{grade}_pkgs'
+    last_vol = float(df[vol_col].dropna().iloc[-1]) if (use_exog and vol_col in df.columns and df[vol_col].notna().any()) else None
+    last_fx  = float(df[FX_COL].dropna().iloc[-1])  if (use_exog and FX_COL  in df.columns and df[FX_COL].notna().any())  else None
+
     for i, fd in enumerate(future_dates):
         t     = len(df) + i
         month = fd.month
@@ -355,8 +410,25 @@ def rf_forecast(df, grade, periods=12):
                 for l in lags_used]
         roll = np.mean(all_prices[-3:]) if len(all_prices) >= 3 else all_prices[-1]
 
-        row  = np.array([[t, month, quarter, m_sin, m_cos] + lv + [roll]])
+        feat_row = [t, month, quarter, m_sin, m_cos] + lv + [roll]
+        # Order MUST match the order returned by feature_cols(feat_df, grade).
+        # feature_cols just drops 'date' and the target grade column; the
+        # remaining order matches the order in which we appended to `out`
+        # inside create_features. We mirror that here.
+        if use_exog:
+            if 'vol_lag_1' in fcols and last_vol is not None:
+                feat_row.append(last_vol)
+            if FX_COL in fcols and last_fx is not None:
+                feat_row.append(last_fx)
+
+        # Safety check: feature length must match training X width.
+        if len(feat_row) != X.shape[1]:
+            # Should never happen; fall back gracefully.
+            feat_row = feat_row[: X.shape[1]] + [0.0] * max(0, X.shape[1] - len(feat_row))
+
+        row  = np.array([feat_row])
         pred = model.predict(row)[0]
+
         # Trend dampening: pull toward recent mean over time
         recent_avg = np.mean(all_prices[-3:])
         damp = min(0.5, (i + 1) * 0.08)
@@ -371,7 +443,7 @@ def rf_forecast(df, grade, periods=12):
 
 
 def rf_cv_metrics(df, grade, n_splits=3):
-    feat_df = create_features(df, grade)
+    feat_df = create_features(df, grade, include_exog=RF_USE_EXOG)
     if len(feat_df) < 4:
         return None
 

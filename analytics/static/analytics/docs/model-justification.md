@@ -37,7 +37,9 @@ Mean MAPE across grades can be dominated by a single grade with high absolute pr
 
 For the current dataset the selected model is **Random Forest** (with `n_estimators=100`, `max_depth=4`, `min_samples_leaf=2`, `random_state=42`). See the dashboard's "Why Random Forest?" panel for the live mean-rank table.
 
-## 4. Feature engineering (used by Linear Regression and Random Forest)
+## 4. Feature engineering
+
+### Autoregressive / seasonal features (used by Linear Regression and Random Forest)
 
 For each grade `g`:
 
@@ -46,6 +48,17 @@ For each grade `g`:
 - `month_sin`, `month_cos` — cyclical seasonality (sin/cos transform of month)
 - `lag_1`, `lag_2`, `lag_3` — recent autoregressive signal
 - `rolling_mean` — 3-month rolling mean shifted by one step (prevents leakage)
+
+### Exogenous regressors (Random Forest only)
+
+Extracted from the KTDA monthly auction PDFs and an external FX feed:
+
+- `vol_lag_1` — the previous month's **sales volume in packages (Pkgs)** for the grade. Lag-1 avoids leaking "this month's" volume into "this month's" price.
+- `usd_kes` — monthly **USD→KES exchange rate** (current month). FX is known at the start of the month so using the current value is safe.
+
+The extractor reads the totals row at the bottom of each monthly PDF (e.g. `4,360 259 36,960 280 … 65,160 4,583,566.00 273`) which contains `[Pkgs, Avg]` columns for each grade plus the all-grades totals. Daily PDFs in the dataset are image-only (no embedded text) and are currently skipped — OCR would be required to use them.
+
+Why keep exog features RF-only? Linear Regression and SARIMAX implementations stay tied to the autoregressive feature set so the comparison table is apples-to-apples between the classical baselines; Random Forest is the natural home for non-linear interactions between price, volume and FX.
 
 Rows with NaN lags are dropped before fitting.
 
@@ -77,10 +90,13 @@ The dashboard renders heuristic 80% intervals: $\hat{y} \pm 1.28 \cdot \sigma_{\
 
 ## 7. Limitations & next steps
 
-- The CSV is aggregated to monthly granularity by mean. Weekly auction granularity is available and would give more data points per grade.
-- SARIMAX order is hard-coded to `(1,1,1)`; an `auto_arima` search would likely improve its standing.
-- The RF recursive forecasting loop applies a small trend-damping term to pull long-horizon forecasts toward the recent mean — useful for stability but it does flatten predictions over 12 months. A direct multi-output regressor per horizon would be more principled.
-- Uncertainty bounds are heuristic, as noted above.
+- The dataset currently contains only the 9 monthly KTDA summary PDFs that have extractable text (post-aggregation: 8 unique months after deduping by `auction_no`). The 15 daily-sale PDFs in `salesreport/` were printed via Microsoft Print-to-PDF and contain no embedded text or images — OCR would be required to ingest them. Adding those would roughly triple the observation count.
+- With ~8 observations the naive last-value baseline is hard to beat (it implicitly assumes prices are flat over short horizons, which is true on this thin dataset). More data, not better models, is the highest-leverage improvement.
+- SARIMAX requires ≥8 observations after differencing and is therefore frequently unavailable; it drops out of the ranking on this dataset.
+- The RF recursive forecasting loop applies a small trend-damping term to pull long-horizon forecasts toward the recent mean. A direct multi-output regressor per horizon would be more principled.
+- Uncertainty bands shown on the dashboard are heuristic ($\hat{y} \pm 1.28\sigma_{\text{hist}}$), not statistical prediction intervals. Bootstrap residual intervals (for RF / LR) or `SARIMAX.get_forecast().conf_int()` are the obvious next steps.
+- USD→KES exchange rates are taken from a manually-maintained monthly lookup (with a free-tier API fallback). For a production deployment a daily fetch from a tier-one rate source (CBK, OANDA) would be advisable.
+- SARIMAX order is hard-coded to `(1,1,1)`; an `auto_arima` search would likely improve its standing once more data is available.
 
 ---
 

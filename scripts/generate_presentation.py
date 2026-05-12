@@ -441,14 +441,19 @@ def build():
     slide = content_slide(prs, "Feature engineering")
     tf = add_textbox(slide, Inches(0.7), Inches(1.2), Inches(12.0), Inches(5.5))
     add_paragraphs(tf, [
-        "time_idx — global trend",
-        "month, quarter — calendar seasonality",
-        "month_sin, month_cos — cyclical sin/cos transform of month",
-        "lag_1, lag_2, lag_3 — recent autoregressive signal",
-        "rolling_mean — 3-month rolling mean, shifted by 1 step (prevents leakage)",
+        "Autoregressive / seasonal features (Linear Regression + Random Forest):",
+        "  • time_idx — global trend",
+        "  • month, quarter — calendar seasonality",
+        "  • month_sin, month_cos — cyclical sin/cos transform of month",
+        "  • lag_1, lag_2, lag_3 — recent autoregressive signal",
+        "  • rolling_mean — 3-month rolling mean, shifted by 1 step (prevents leakage)",
         "",
-        "Rows with NaN lags are dropped before fitting. Same features are used by both Linear Regression and Random Forest.",
-    ], size=16, bullet=True)
+        "Exogenous regressors (Random Forest only):",
+        "  • vol_lag_1 — previous month's sales volume (Pkgs), extracted from auction PDFs",
+        "  • usd_kes  — monthly USD→KES exchange rate",
+        "",
+        "Rows with NaN lags are dropped before fitting.",
+    ], size=14)
 
     slide = content_slide(prs, "How the global model is selected")
     tf = add_textbox(slide, Inches(0.7), Inches(1.2), Inches(12.0), Inches(5.5))
