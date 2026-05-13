@@ -120,9 +120,12 @@ def create_features(df, grade, lag_periods=None, *, include_exog=False):
       - lag_1, lag_2, lag_3  (autoregressive)
       - rolling_mean_3        (local trend smoothing)
 
-    When include_exog=True and the columns are present in `df`, also adds:
+    When include_exog=True and the columns are present in `df` AND contain at
+    least one non-NaN value, also adds:
       - vol_lag_1   : previous month's sales volume for this grade
       - usd_kes     : current month's USD→KES exchange rate (forward-filled)
+    Exog columns that are entirely NaN (e.g. when the FX feed is unavailable)
+    are silently dropped to avoid wiping out every row in ``dropna()``.
     These extra features are used only by the Random Forest model so that
     the comparison table stays fair between the classical candidates.
     """
@@ -131,11 +134,15 @@ def create_features(df, grade, lag_periods=None, *, include_exog=False):
 
     cols = ['date', grade]
     vol_col = f'{grade}_pkgs'
+    use_vol = False
+    use_fx  = False
     if include_exog:
-        if vol_col in df.columns:
+        if vol_col in df.columns and df[vol_col].notna().any():
             cols.append(vol_col)
-        if FX_COL in df.columns:
+            use_vol = True
+        if FX_COL in df.columns and df[FX_COL].notna().any():
             cols.append(FX_COL)
+            use_fx = True
 
     out = df[cols].copy()
     out['time_idx'] = np.arange(len(out))
@@ -153,16 +160,15 @@ def create_features(df, grade, lag_periods=None, *, include_exog=False):
     else:
         out['rolling_mean'] = out[grade].shift(1)
 
-    if include_exog:
-        if vol_col in out.columns:
-            # Use lag-1 volume to avoid leakage of "this month's" volume
-            # into the model when predicting "this month's" price.
-            out['vol_lag_1'] = out[vol_col].shift(1)
-            out = out.drop(columns=[vol_col])
-        if FX_COL in out.columns:
-            # FX is generally known at the start of the month, so we can
-            # safely use the current value. Forward-fill any gaps.
-            out[FX_COL] = out[FX_COL].ffill()
+    if use_vol:
+        # Use lag-1 volume to avoid leakage of "this month's" volume
+        # into the model when predicting "this month's" price.
+        out['vol_lag_1'] = out[vol_col].shift(1)
+        out = out.drop(columns=[vol_col])
+    if use_fx:
+        # FX is generally known at the start of the month, so we can
+        # safely use the current value. Forward-fill any gaps.
+        out[FX_COL] = out[FX_COL].ffill()
 
     out = out.dropna().reset_index(drop=True)
     return out
@@ -170,6 +176,42 @@ def create_features(df, grade, lag_periods=None, *, include_exog=False):
 
 def feature_cols(df, grade):
     return [c for c in df.columns if c not in ['date', grade]]
+
+
+def contiguous_tail(df, grade, max_gap_months=6):
+    """
+    Return the latest contiguous monthly slice of ``df`` for ``grade``.
+
+    Walks backwards from the last observation and stops as soon as it hits
+    a month-to-month gap larger than ``max_gap_months``. This protects the
+    time-series models from a degenerate series like
+    ``[May 2022, Apr 2024, May 2024, ...]`` — where the 23-month gap would
+    otherwise pollute lag features and force SARIMAX to forward-fill two
+    years of phantom values.
+
+    The naive baseline is unaffected; only the lag/AR/seasonal models call
+    this helper.
+    """
+    clean = df[['date', grade]].dropna(subset=[grade]).reset_index(drop=True)
+    if len(clean) <= 1:
+        return df.reset_index(drop=True)
+
+    # Walk from the end backwards; cut as soon as we find a long gap.
+    dates = pd.to_datetime(clean['date']).reset_index(drop=True)
+    cut = 0
+    for i in range(len(dates) - 1, 0, -1):
+        delta = (dates.iloc[i].year - dates.iloc[i - 1].year) * 12 \
+              + (dates.iloc[i].month - dates.iloc[i - 1].month)
+        if delta > max_gap_months:
+            cut = i
+            break
+
+    if cut == 0:
+        return df.reset_index(drop=True)
+
+    tail_dates = set(dates.iloc[cut:].dt.strftime('%Y-%m').tolist())
+    out = df[pd.to_datetime(df['date']).dt.strftime('%Y-%m').isin(tail_dates)]
+    return out.reset_index(drop=True)
 
 # ---------------------------------------------------------------------------
 # Model 1 – Naïve baseline
@@ -216,7 +258,8 @@ def naive_cv_metrics(df, grade, n_splits=3):
 # ---------------------------------------------------------------------------
 
 def linear_forecast(df, grade, periods=12):
-    feat_df = create_features(df, grade)
+    train = contiguous_tail(df, grade)
+    feat_df = create_features(train, grade)
     if len(feat_df) < 4:
         return naive_forecast(df, grade, periods)
 
@@ -225,17 +268,17 @@ def linear_forecast(df, grade, periods=12):
     model = LinearRegression()
     model.fit(X, y)
 
-    last_date = pd.Timestamp(df['date'].iloc[-1])
+    last_date = pd.Timestamp(train['date'].iloc[-1])
     future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
                                  periods=periods, freq='MS')
 
     # Build future feature rows iteratively
-    all_prices = list(df[grade].values)
+    all_prices = list(train[grade].values)
     forecasts = []
     lags_used = [1, 2, 3]
 
     for i, fd in enumerate(future_dates):
-        t = len(df) + i
+        t = len(train) + i
         month = fd.month
         quarter = fd.quarter
         m_sin = np.sin(2 * np.pi * month / 12)
@@ -247,17 +290,20 @@ def linear_forecast(df, grade, periods=12):
 
         row = np.array([[t, month, quarter, m_sin, m_cos] + lv + [roll]])
         pred = model.predict(row)[0]
-        pred = float(np.clip(pred, df[grade].min() * 0.7, df[grade].max() * 1.4))
+        pred = float(np.clip(pred, train[grade].min() * 0.7, train[grade].max() * 1.4))
         forecasts.append(pred)
         all_prices.append(pred)
 
+    # Keep the FULL history in the chart so the May-2022 row is still visible;
+    # only the model was trained on the contiguous tail.
     hist = pd.DataFrame({'date': df['date'], f'forecast_{grade}': df[grade]})
     fut  = pd.DataFrame({'date': future_dates, f'forecast_{grade}': forecasts})
     return pd.concat([hist, fut], ignore_index=True)
 
 
 def linear_cv_metrics(df, grade, n_splits=3):
-    feat_df = create_features(df, grade)
+    train = contiguous_tail(df, grade)
+    feat_df = create_features(train, grade)
     if len(feat_df) < 4:
         return None
 
@@ -292,36 +338,48 @@ def linear_cv_metrics(df, grade, n_splits=3):
 # ---------------------------------------------------------------------------
 
 def sarimax_forecast(df, grade, periods=12):
-    if not SARIMAX_AVAILABLE or len(df) < 6:
+    if not SARIMAX_AVAILABLE:
+        return linear_forecast(df, grade, periods)
+
+    train = contiguous_tail(df, grade)
+    if len(train) < 6:
         return linear_forecast(df, grade, periods)
 
     try:
-        series = df.set_index('date')[grade].asfreq('MS').fillna(method='ffill')
-        # Simple ARIMA(1,1,1) — justified by small dataset size
+        # Build a true month-start indexed series. The tail is already
+        # contiguous (no gap > 6 months) so any small gaps are safely
+        # forward-filled without distorting the regression.
+        series = (train.set_index('date')[grade]
+                       .asfreq('MS')
+                       .ffill())
         model = SARIMAX(series, order=(1, 1, 1), trend='c',
                         enforce_stationarity=False, enforce_invertibility=False)
         fit = model.fit(disp=False)
         fcast = fit.forecast(steps=periods)
 
-        last_date = pd.Timestamp(df['date'].iloc[-1])
+        last_date = pd.Timestamp(train['date'].iloc[-1])
         future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
                                      periods=periods, freq='MS')
 
         hist = pd.DataFrame({'date': df['date'], f'forecast_{grade}': df[grade]})
         fut  = pd.DataFrame({'date': future_dates,
                              f'forecast_{grade}': fcast.values.clip(
-                                 df[grade].min() * 0.7, df[grade].max() * 1.4)})
+                                 train[grade].min() * 0.7, train[grade].max() * 1.4)})
         return pd.concat([hist, fut], ignore_index=True)
     except Exception:
         return linear_forecast(df, grade, periods)
 
 
 def sarimax_cv_metrics(df, grade, n_splits=3):
-    if not SARIMAX_AVAILABLE or len(df) < 8:
+    if not SARIMAX_AVAILABLE:
         return None
 
-    prices = df[grade].values
-    dates  = df['date'].values
+    train = contiguous_tail(df, grade)
+    if len(train) < 8:
+        return None
+
+    prices = train[grade].values
+    dates  = pd.to_datetime(train['date']).values
     n_splits = min(n_splits, len(prices) - 4)
     if n_splits < 1:
         return None
@@ -332,8 +390,9 @@ def sarimax_cv_metrics(df, grade, n_splits=3):
         if len(train_idx) < 4:
             continue
         try:
-            train_s = pd.Series(prices[train_idx],
-                                index=pd.DatetimeIndex(dates[train_idx]).to_period('M').to_timestamp())
+            idx = (pd.DatetimeIndex(dates[train_idx])
+                     .to_period('M').to_timestamp())
+            train_s = pd.Series(prices[train_idx], index=idx).asfreq('MS').ffill()
             model = SARIMAX(train_s, order=(1, 1, 1), trend='c',
                             enforce_stationarity=False, enforce_invertibility=False)
             fit   = model.fit(disp=False)
@@ -368,7 +427,8 @@ RF_USE_EXOG = True
 
 def rf_forecast(df, grade, periods=12):
     use_exog = RF_USE_EXOG
-    feat_df = create_features(df, grade, include_exog=use_exog)
+    train = contiguous_tail(df, grade)
+    feat_df = create_features(train, grade, include_exog=use_exog)
     if len(feat_df) < 4:
         return naive_forecast(df, grade, periods)
 
@@ -384,11 +444,11 @@ def rf_forecast(df, grade, periods=12):
     )
     model.fit(X, y)
 
-    last_date = pd.Timestamp(df['date'].iloc[-1])
+    last_date = pd.Timestamp(train['date'].iloc[-1])
     future_dates = pd.date_range(start=last_date + pd.DateOffset(months=1),
                                  periods=periods, freq='MS')
 
-    all_prices = list(df[grade].values)
+    all_prices = list(train[grade].values)
     forecasts  = []
     lags_used  = [1, 2, 3]
 
@@ -396,11 +456,11 @@ def rf_forecast(df, grade, periods=12):
     # future volume / FX, so the most-recent-known value is used — a sensible
     # neutral assumption that lets the trained model still query its trees.
     vol_col = f'{grade}_pkgs'
-    last_vol = float(df[vol_col].dropna().iloc[-1]) if (use_exog and vol_col in df.columns and df[vol_col].notna().any()) else None
-    last_fx  = float(df[FX_COL].dropna().iloc[-1])  if (use_exog and FX_COL  in df.columns and df[FX_COL].notna().any())  else None
+    last_vol = float(train[vol_col].dropna().iloc[-1]) if (use_exog and vol_col in train.columns and train[vol_col].notna().any()) else None
+    last_fx  = float(train[FX_COL].dropna().iloc[-1])  if (use_exog and FX_COL  in train.columns and train[FX_COL].notna().any())  else None
 
     for i, fd in enumerate(future_dates):
-        t     = len(df) + i
+        t     = len(train) + i
         month = fd.month
         quarter = fd.quarter
         m_sin = np.sin(2 * np.pi * month / 12)
@@ -433,7 +493,7 @@ def rf_forecast(df, grade, periods=12):
         recent_avg = np.mean(all_prices[-3:])
         damp = min(0.5, (i + 1) * 0.08)
         pred = pred * (1 - damp) + recent_avg * damp
-        pred = float(np.clip(pred, df[grade].min() * 0.7, df[grade].max() * 1.4))
+        pred = float(np.clip(pred, train[grade].min() * 0.7, train[grade].max() * 1.4))
         forecasts.append(pred)
         all_prices.append(pred)
 
@@ -443,7 +503,8 @@ def rf_forecast(df, grade, periods=12):
 
 
 def rf_cv_metrics(df, grade, n_splits=3):
-    feat_df = create_features(df, grade, include_exog=RF_USE_EXOG)
+    train = contiguous_tail(df, grade)
+    feat_df = create_features(train, grade, include_exog=RF_USE_EXOG)
     if len(feat_df) < 4:
         return None
 

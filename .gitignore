@@ -36,3 +36,9 @@ Thumbs.db
 *.egg-info/
 build/
 dist/
+
+# --- Extractor caches ----------------------------------------------------
+# Derived/regenerable caches written by scripts/extract_sales_volumes.py.
+# Keys include mtime+size so they aren't portable across machines.
+analytics/data/.ocr_cache.json
+analytics/data/.fx_cache.json

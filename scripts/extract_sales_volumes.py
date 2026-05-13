@@ -28,6 +28,9 @@ from typing import Iterable
 import pandas as pd
 import pdfplumber
 
+# OCR engine — lazy-initialised only if we hit an image-only PDF.
+_OCR_ENGINE = None
+
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("extract")
 
@@ -35,6 +38,7 @@ ROOT       = Path(__file__).resolve().parent.parent
 PDF_DIR    = ROOT / "salesreport"
 CSV_PATH   = ROOT / "analytics" / "data" / "tea_auction_data.csv"
 FX_CACHE   = ROOT / "analytics" / "data" / ".fx_cache.json"
+OCR_CACHE  = ROOT / "analytics" / "data" / ".ocr_cache.json"
 
 # Header tokens as they appear in the PDFs (with TOTALS at the end).
 # Order matters: must match the column ordering in the PDF totals row.
@@ -71,7 +75,18 @@ MONTH_LOOKUP = {
 # PDF parsing
 # ===========================================================================
 NUM_RE = re.compile(r"^-?[\d,]+(?:\.\d+)?$")
-AUCTION_HEADER_RE = re.compile(r"Auction Nos\s+(\d{4})/(\d{1,3})\s+to\s+(\d{4})/(\d{1,3})")
+# Tolerant of OCR concatenation: "Auction Nos 2025/21 to 2025/21" can come
+# back as "AuctionNoS2026/13to2026/13" after OCR, so allow optional
+# whitespace and a permissive "to" boundary.
+AUCTION_HEADER_RE = re.compile(
+    r"Auction\s*Nos?\.?\s*(\d{4})\s*/\s*(\d{1,3})\s*(?:to|\-|\u2013)\s*(\d{4})\s*/\s*(\d{1,3})",
+    re.I,
+)
+# Daily-sale image PDFs use "Auction No : 11 Sale Date : 13/03/2026".
+# After OCR the spacing/punctuation can vary, so accept any non-word
+# separators between "No" and the digits.
+DAILY_AUCTION_RE  = re.compile(r"Auction\s*No\W*(\d{1,3})\b", re.I)
+DAILY_FILENAME_RE = re.compile(r"sale\s+for\s+(\d{1,2})\.(\d{1,2})\.(\d{4})", re.I)
 
 
 def _to_number(token: str) -> float | None:
@@ -85,13 +100,20 @@ def _to_number(token: str) -> float | None:
 
 def filename_to_period(name: str) -> date | None:
     """
-    Resolve "Jan 2025.pdf", "May 2023.pdf", etc. to a month-start date.
-    Daily filenames like "sale for 13.03.2026.pdf" are NOT handled here —
-    those PDFs have no extractable text and are skipped upstream.
+    Resolve PDF filenames to a sale date.
+
+    Monthly filenames ("Jan 2025.pdf", "May 2023.pdf", …) → first of the month.
+    Daily filenames ("sale for 13.03.2026.pdf")            → actual sale date.
     """
     stem = Path(name).stem.lower().strip()
-    if stem.startswith("sale for"):
-        return None
+
+    m = DAILY_FILENAME_RE.search(stem)
+    if m:
+        d, mo, y = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        try:
+            return date(y, mo, d)
+        except ValueError:
+            return None
 
     parts = stem.replace("-", " ").split()
     month = None
@@ -151,21 +173,34 @@ def parse_totals_row(numbers: list[float]) -> dict[str, float] | None:
     return result
 
 
-def extract_monthly_pdf(path: Path) -> dict | None:
-    """
-    Extract the period + per-grade Pkgs/Avg + totals from a monthly PDF.
-    Returns a dict suitable for one CSV row.
-    """
-    period = filename_to_period(path.name)
-    if period is None:
-        log.warning("Skipping %s — could not parse period from filename.", path.name)
-        return None
+def _build_row(period: date, auction_no: str, parsed: dict, source_pdf: str) -> dict:
+    """Assemble the final dict for one CSV row."""
+    return {
+        "date":       pd.Timestamp(period),
+        "auction_no": auction_no or "",
+        # Per-grade price (Avg from the totals row)
+        **{g: parsed.get(f"{g}_avg") for g in GRADE_TO_CSV.values()},
+        # Per-grade sales volume (Pkgs)
+        **{f"{g}_pkgs": parsed.get(f"{g}_pkgs") for g in GRADE_TO_CSV.values()},
+        # Aggregate volumes
+        "total_pkgs": parsed.get("total_pkgs"),
+        "total_kgs":  parsed.get("total_kgs"),
+        "total_avg":  parsed.get("total_avg"),
+        "source_pdf": source_pdf,
+    }
 
+
+def _extract_via_text(path: Path) -> tuple[str | None, list[float] | None]:
+    """
+    Pull the auction header and the bottom totals row out of a PDF using
+    plain text extraction. Returns ``(auction_no, totals_numbers)`` where each
+    component is None when nothing could be parsed.
+    """
     try:
         pdf = pdfplumber.open(str(path))
     except Exception as e:
         log.error("Failed to open %s: %s", path.name, e)
-        return None
+        return None, None
 
     auction_no: str | None = None
     totals_numbers: list[float] | None = None
@@ -178,14 +213,180 @@ def extract_monthly_pdf(path: Path) -> dict | None:
                     if m:
                         auction_no = f"{m.group(1)}/{m.group(2)}"
                 tokens = line.split()
-                # Totals row: every token must be numeric & at least 5 of them.
                 nums = [_to_number(t) for t in tokens]
-                if all(n is not None for n in nums) and len(nums) >= 7:
+                if nums and all(n is not None for n in nums) and len(nums) >= 7:
                     totals_numbers = [n for n in nums if n is not None]  # type: ignore[misc]
-                    # Don't break — keep the LAST numeric-only row, which is
-                    # always the bottom totals on the final page.
     finally:
         pdf.close()
+
+    return auction_no, totals_numbers
+
+
+def _get_ocr_engine():
+    """Lazy-load the RapidOCR engine — heavy import, only needed for image PDFs."""
+    global _OCR_ENGINE
+    if _OCR_ENGINE is None:
+        try:
+            from rapidocr_onnxruntime import RapidOCR  # type: ignore
+        except ImportError as e:
+            raise RuntimeError(
+                "OCR fallback requires `rapidocr-onnxruntime` and `pypdfium2`. "
+                "Install with: pip install rapidocr-onnxruntime pypdfium2"
+            ) from e
+        _OCR_ENGINE = RapidOCR()
+    return _OCR_ENGINE
+
+
+def _ocr_cache_load() -> dict:
+    if OCR_CACHE.exists():
+        try:
+            return json.loads(OCR_CACHE.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def _ocr_cache_save(cache: dict) -> None:
+    OCR_CACHE.parent.mkdir(parents=True, exist_ok=True)
+    OCR_CACHE.write_text(json.dumps(cache, indent=2, sort_keys=True))
+
+
+def _ocr_pdf_pages(path: Path, scale: float = 300 / 72) -> list[list[tuple[float, float, str]]]:
+    """
+    OCR every page of an image-based PDF. Returns one list of
+    ``(y_top, x_left, text)`` tokens per page, sorted top-to-bottom / left-to-right.
+
+    Results are cached on disk keyed by ``(filename, mtime, size)`` so re-runs
+    skip the expensive OCR step for unchanged PDFs.
+    """
+    cache = _ocr_pdf_pages._cache  # type: ignore[attr-defined]
+    stat = path.stat()
+    cache_key = f"{path.name}|{int(stat.st_mtime)}|{stat.st_size}"
+    if cache_key in cache:
+        return [[tuple(tok) for tok in page] for page in cache[cache_key]]
+
+    try:
+        import pypdfium2 as pdfium  # type: ignore
+    except ImportError as e:
+        raise RuntimeError(
+            "OCR fallback requires `pypdfium2`. Install with: pip install pypdfium2"
+        ) from e
+
+    ocr = _get_ocr_engine()
+    pdf = pdfium.PdfDocument(str(path))
+    pages: list[list[tuple[float, float, str]]] = []
+    try:
+        for page_idx in range(len(pdf)):
+            page = pdf[page_idx]
+            pil = page.render(scale=scale).to_pil()
+            try:
+                result, _ = ocr(pil)
+            except Exception as e:
+                log.warning("OCR failed on %s page %d: %s", path.name, page_idx + 1, e)
+                pages.append([])
+                continue
+            tokens: list[tuple[float, float, str]] = []
+            if result:
+                for entry in result:
+                    box, text, _score = entry
+                    ys = [pt[1] for pt in box]
+                    xs = [pt[0] for pt in box]
+                    tokens.append((min(ys), min(xs), text.strip()))
+            tokens.sort()
+            pages.append(tokens)
+    finally:
+        pdf.close()
+
+    cache[cache_key] = [[list(tok) for tok in page] for page in pages]
+    _ocr_cache_save(cache)
+    return pages
+
+
+# Initialise the in-memory OCR-page cache at import time.
+_ocr_pdf_pages._cache = _ocr_cache_load()  # type: ignore[attr-defined]
+
+
+def _extract_via_ocr(path: Path, period: date) -> tuple[str | None, list[float] | None]:
+    """
+    OCR-based fallback for image-only daily-sale PDFs.
+
+    Strategy:
+    1. OCR every page.
+    2. Search the combined text for the auction header. Monthly-style header
+       (``Auction Nos YYYY/NN to YYYY/NN``) wins if present; otherwise fall back
+       to the daily-style header (``Auction No : NN``) and pair it with the
+       sale-date year from the filename to build ``YYYY/NN``.
+    3. On the last page, locate the y-band of the totals row by finding a
+       token shaped like a 6+ digit total-kgs value (e.g. ``4,355,170.00``).
+    4. Sort the tokens in that band left-to-right and return their numeric
+       values to be parsed by ``parse_totals_row``.
+    """
+    log.info("OCR-decoding %s …", path.name)
+    pages = _ocr_pdf_pages(path)
+    if not any(pages):
+        log.warning("OCR returned no text for %s", path.name)
+        return None, None
+
+    full_text = "\n".join(tok[2] for page in pages for tok in page)
+
+    auction_no: str | None = None
+    m = AUCTION_HEADER_RE.search(full_text)
+    if m:
+        auction_no = f"{m.group(1)}/{m.group(2)}"
+    else:
+        m2 = DAILY_AUCTION_RE.search(full_text)
+        if m2:
+            auction_no = f"{period.year}/{int(m2.group(1)):02d}"
+
+    last_page = pages[-1]
+    totals_y: float | None = None
+    # Total kgs is always > 100,000 and ends with ".00".
+    for y, _x, text in last_page:
+        clean = text.replace(",", "").replace(" ", "")
+        if re.fullmatch(r"\d+\.00", clean):
+            try:
+                val = float(clean)
+            except ValueError:
+                continue
+            if val >= 100_000:
+                totals_y = y
+                break
+
+    if totals_y is None:
+        log.warning("Could not locate totals row via OCR in %s", path.name)
+        return auction_no, None
+
+    band = [t for t in last_page if abs(t[0] - totals_y) <= 20]
+    band.sort(key=lambda t: t[1])
+    nums = [n for n in (_to_number(t[2]) for t in band) if n is not None]
+    if len(nums) < 7:
+        log.warning("OCR totals row in %s has too few numbers: %s",
+                    path.name, nums)
+        return auction_no, None
+    return auction_no, nums
+
+
+def extract_pdf(path: Path) -> dict | None:
+    """
+    Extract one CSV row from a PDF — works for both monthly text PDFs and
+    daily image-only PDFs (transparent OCR fallback).
+    """
+    period = filename_to_period(path.name)
+    if period is None:
+        log.warning("Skipping %s — could not parse period from filename.", path.name)
+        return None
+
+    auction_no, totals_numbers = _extract_via_text(path)
+
+    if totals_numbers is None:
+        # Image-only PDF — fall back to OCR.
+        try:
+            auction_no_ocr, totals_numbers = _extract_via_ocr(path, period)
+        except RuntimeError as e:
+            log.error("%s — %s", path.name, e)
+            return None
+        if auction_no_ocr and not auction_no:
+            auction_no = auction_no_ocr
 
     if totals_numbers is None:
         log.warning("Could not locate totals row in %s", path.name)
@@ -193,23 +394,15 @@ def extract_monthly_pdf(path: Path) -> dict | None:
 
     parsed = parse_totals_row(totals_numbers)
     if parsed is None:
-        log.warning("Failed to parse totals row in %s: %s", path.name, totals_numbers)
+        log.warning("Failed to parse totals row in %s: %s",
+                    path.name, totals_numbers)
         return None
 
-    row = {
-        "date":       pd.Timestamp(period),
-        "auction_no": auction_no or "",
-        # Per-grade price (Avg from the totals row)
-        **{g: parsed.get(f"{g}_avg") for g in GRADE_TO_CSV.values()},
-        # Per-grade sales volume (Pkgs)
-        **{f"{g}_pkgs": parsed.get(f"{g}_pkgs") for g in GRADE_TO_CSV.values()},
-        # Aggregate volumes for the month
-        "total_pkgs": parsed.get("total_pkgs"),
-        "total_kgs":  parsed.get("total_kgs"),
-        "total_avg":  parsed.get("total_avg"),
-        "source_pdf": path.name,
-    }
-    return row
+    return _build_row(period, auction_no or "", parsed, path.name)
+
+
+# Backwards-compatible alias for any external caller.
+extract_monthly_pdf = extract_pdf
 
 
 # ===========================================================================
@@ -325,12 +518,22 @@ def main():
 
     df = pd.DataFrame(rows).sort_values("date").reset_index(drop=True)
 
-    # Detect duplicates by auction_no — the PDFs sometimes have the same
-    # auction in two differently-named files (e.g. May 2023.pdf = May 2025.pdf,
+    # ------------------------------------------------------------------
+    # Deduplicate by auction_no — the PDFs sometimes have the same auction
+    # in two differently-named files (e.g. May 2023.pdf = May 2025.pdf,
     # both header "Auction Nos 2025/21"). Keep the row whose filename agrees
     # with the parsed auction year; otherwise keep the first.
-    if df["auction_no"].duplicated().any():
-        dupes = df[df["auction_no"].duplicated(keep=False)]
+    #
+    # IMPORTANT: only dedup rows that actually have an auction_no. Rows with
+    # a missing auction_no (e.g. daily-sale PDFs where OCR couldn't read the
+    # header) must NOT be collapsed together — they are distinct sale dates.
+    # ------------------------------------------------------------------
+    has_no = df["auction_no"].astype(str).str.strip() != ""
+    with_no    = df[has_no].copy()
+    without_no = df[~has_no].copy()
+
+    if with_no["auction_no"].duplicated().any():
+        dupes = with_no[with_no["auction_no"].duplicated(keep=False)]
         log.warning("Duplicate auction_no found across %d rows:", len(dupes))
         for _, r in dupes.iterrows():
             log.warning("    auction %s  date %s  from %s",
@@ -344,14 +547,17 @@ def main():
             except (ValueError, AttributeError):
                 return False
 
-        df["_matches"] = df.apply(_date_matches_auction, axis=1)
-        # Keep rows that match by year; fall back to first occurrence.
-        df = (df.sort_values(["auction_no", "_matches"], ascending=[True, False])
-                .drop_duplicates(subset="auction_no", keep="first")
-                .drop(columns="_matches")
-                .sort_values("date")
-                .reset_index(drop=True))
-        log.info("After dedup: %d rows.", len(df))
+        with_no["_matches"] = with_no.apply(_date_matches_auction, axis=1)
+        with_no = (with_no.sort_values(["auction_no", "_matches"],
+                                       ascending=[True, False])
+                          .drop_duplicates(subset="auction_no", keep="first")
+                          .drop(columns="_matches"))
+
+    df = (pd.concat([with_no, without_no], ignore_index=True)
+            .sort_values("date")
+            .reset_index(drop=True))
+    log.info("After dedup: %d rows (%d with auction_no, %d without).",
+             len(df), len(with_no), len(without_no))
 
     # Add USD/KES
     if not args.skip_fx:

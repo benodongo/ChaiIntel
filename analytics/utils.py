@@ -3,28 +3,43 @@ import pandas as pd
 from prophet import Prophet
 import logging
 
+from .rfutils import load_historical_data as _load_canonical_data, GRADE_LABELS
+
 # Suppress Prophet warnings for cleaner output
 logging.getLogger('prophet').setLevel(logging.WARNING)
 
+# Grades expected by the legacy Prophet pipeline (uses the display labels with
+# slashes / spaces, NOT the internal column names). Kept here for backwards
+# compatibility with any caller that still expects this exact column naming.
+_LEGACY_GRADE_NAMES = ['BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']
+
+# Map from internal CSV column → legacy display name.
+_INTERNAL_TO_LEGACY = {
+    'BP1':      'BP1',
+    'PF1':      'PF1',
+    'DUST1':    'DUST1',
+    'FNGS_1_2': 'FNGS 1/2',
+    'DUST_1_2': 'DUST 1/2',
+}
+
+
 # --- Historical Data Loader ---
 def load_historical_data():
-    """Load historical tea auction data and ensure it's sorted chronologically."""
-    data = {
-        'Month': ['May-22', 'Jun-24', 'May-24', 'Aug-24', 'Dec-24', 'Jan-25', 'Apr-25', 'May-25','Jun-25'],
-        'Auction_No': ['2022/20', '2024/26', '2024/22', '2024/35', '2024/51', '2025/01', '2025/16', '2025/21', '2025/23'],
-        'BP1': [265, 256, 259, 287, 268, 277, 201, 176, 246],
-        'PF1': [260, 280, 280, 291, 277, 281, 239, 228, 256],
-        'DUST1': [269, 272, 276, 284, 258, 255, 250, 229, 268],
-        'FNGS 1/2': [150, 132, 130, 129, 129, 151, 140, 126, 141],
-        'DUST 1/2': [177, 148, 162, 149, 144, 144, 134, 126,131],
-    }
-    
-    df = pd.DataFrame(data)
-    df['date'] = pd.to_datetime(df['Month'], format='%b-%y')
-    
-    # Sort by date
-    df = df[['date', 'BP1', 'PF1', 'DUST1', 'FNGS 1/2', 'DUST 1/2']].sort_values('date')
-    return df
+    """
+    Load historical tea auction data from ``analytics/data/tea_auction_data.csv``
+    (the canonical source extracted from the auction PDFs).
+
+    The returned DataFrame uses the *legacy* column names ``FNGS 1/2`` and
+    ``DUST 1/2`` so that this module's downstream Prophet pipeline keeps
+    working unchanged. All callers in the main app should use ``rfutils``
+    directly; this module is preserved as an alternative experimentation
+    surface.
+    """
+    df = _load_canonical_data()
+    df = df[['date'] + list(_INTERNAL_TO_LEGACY.keys())].rename(
+        columns=_INTERNAL_TO_LEGACY
+    )
+    return df.sort_values('date').reset_index(drop=True)
 
 def calculate_price_bounds(historical_prices):
     """Calculate reasonable price bounds based on historical data."""
