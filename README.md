@@ -1,6 +1,40 @@
-# ChaiIntel - Project Setup Guide
+# ChaiIntel - Project Setup Guide (Windows)
 
-This guide walks you through setting up the ChaiIntel Django project on your local machine.
+This guide walks you through setting up the ChaiIntel Django project on a Windows machine.
+
+---
+
+## 🚀 Quick Start (One Command)
+
+If you just want to run the application and you are **not a programmer**, follow these three steps:
+
+1. Install **Python 3.9+** from [python.org](https://www.python.org/downloads/) and make sure to tick **"Add Python to PATH"** during installation.
+2. Open the `ChaiIntel` folder in File Explorer.
+3. **Double-click `run_chaiintel.bat`**.
+
+That single script will:
+
+* create the virtual environment (the first time only),
+* activate it,
+* install all required libraries (only when `requirements.txt` changes),
+* apply database migrations, and
+* start the application at [http://127.0.0.1:8000](http://127.0.0.1:8000).
+
+When you see *"Starting development server at http://127.0.0.1:8000"*, open that link in your browser. To stop the app, press **CTRL+C** in the black window or just close it.
+
+### All-in-one terminal command
+
+Prefer the terminal? From inside the `ChaiIntel` folder, run:
+
+```bat
+run_chaiintel.bat
+```
+
+---
+
+## 🛠 Manual Setup (for developers)
+
+The sections below explain what the launcher does, step by step, in case you want to set things up manually.
 
 ---
 
@@ -36,18 +70,9 @@ cd ChaiIntel
 
 ## ✅ Step 4: Create Virtual Environment
 
-### 🔹 On Windows
-
-```bash
+```bat
 python -m venv venv
 venv\Scripts\activate
-```
-
-### 🔹 On macOS/Linux
-
-```bash
-python3 -m venv venv
-source venv/bin/activate
 ```
 
 ---
