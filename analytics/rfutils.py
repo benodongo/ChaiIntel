@@ -233,7 +233,8 @@ def naive_cv_metrics(df, grade, n_splits=3):
     prices = df[grade].values
     n = len(prices)
     n_splits = min(n_splits, n - 2)
-    if n_splits < 1:
+    # sklearn's TimeSeriesSplit requires at least 2 folds.
+    if n_splits < 2:
         return None
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -310,7 +311,8 @@ def linear_cv_metrics(df, grade, n_splits=3):
     X = feat_df[feature_cols(feat_df, grade)].values
     y = feat_df[grade].values
     n_splits = min(n_splits, len(feat_df) - 2)
-    if n_splits < 1:
+    # sklearn's TimeSeriesSplit requires at least 2 folds.
+    if n_splits < 2:
         return None
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -381,7 +383,8 @@ def sarimax_cv_metrics(df, grade, n_splits=3):
     prices = train[grade].values
     dates  = pd.to_datetime(train['date']).values
     n_splits = min(n_splits, len(prices) - 4)
-    if n_splits < 1:
+    # sklearn's TimeSeriesSplit requires at least 2 folds.
+    if n_splits < 2:
         return None
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
@@ -512,7 +515,8 @@ def rf_cv_metrics(df, grade, n_splits=3):
     X = feat_df[fcols].values
     y = feat_df[grade].values
     n_splits = min(n_splits, len(feat_df) - 2)
-    if n_splits < 1:
+    # sklearn's TimeSeriesSplit requires at least 2 folds.
+    if n_splits < 2:
         return None
 
     tscv = TimeSeriesSplit(n_splits=n_splits)
